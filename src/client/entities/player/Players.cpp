@@ -845,7 +845,8 @@ void FillCommon(OnFootState& st, CPlayerPed* me) {
     st.ammo = (uint16_t)std::clamp(w.ammoTotal, 0, 65535);
     st.area = me->AreaCode();
     CPad* pad = GetPad(0);
-    if (pad->DisablePlayerControls == 0 && !game::MenuActive()) st.pad = PadState::From(pad->NewState);
+    // the host's rhythm contest reads this player's pad while the host's scene holds its controls
+    if ((pad->DisablePlayerControls == 0 || PlayingHostMinigame()) && !game::MenuActive()) st.pad = PadState::From(pad->NewState);
     // a passenger aims out of the window with the mouse's look button, which the pad state has not: R1 (PassengerDriveBy)
     if (me->InVehicle() && me->Vehicle() && me->Vehicle()->Driver() != me && pad->NewState.m_bVehicleMouseLook)
         st.pad.buttons |= PadState::B_RS1;
@@ -1964,7 +1965,7 @@ void Players::SendLocalState() {
     st.moveState = (uint8_t)me->MoveState();
     st.wanted = WantedLevel(me);
     CPad* pad = GetPad(0);
-    if (pad->DisablePlayerControls == 0 && !game::MenuActive()) st.pad = PadState::From(pad->NewState);
+    if ((pad->DisablePlayerControls == 0 || PlayingHostMinigame()) && !game::MenuActive()) st.pad = PadState::From(pad->NewState);
     CameraState& c = st.cam;
     c.mode = cam::Mode();
     c.weaponMode = cam::WeaponMode();

@@ -197,6 +197,10 @@ enum MsgId : uint8_t {
     G_SIDE = 171,             // reliable: u8 op (1 offer, 2 accept, 3 decline, 4 end, 5 leave), u8 to (a player, 255 all),
                               // str name (the side activity's mission script), i32 money (end: what it paid)
     G_MONEY = 172,            // reliable, to one player: u8 op (1 a payment, 2 taken, 3 refused), u32 id, i32 amount (/pay)
+    G_MINIGAME = 173,         // u8 op: the host's rhythm contest (1 offered to all, 2 a player claims it, 3 who plays it:
+                              // u8 player, 255 the host; 4 over), reliable; 5 its sprites to the one who plays it (u8 n,
+                              // {u8 slot, str name}), reliable; 6 this frame's drawing (u8 n, {u8 type, u8 before fade,
+                              // i16 sprite, 4 f32 corners in screen fractions, f32 angle, u32 colour}), unreliable
 
     G_VOICE = 200,            // unreliable: voice frame
     G_LAST = 255,

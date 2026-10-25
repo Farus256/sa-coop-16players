@@ -20,4 +20,7 @@ bool StoryMission(void* script);
 // the mission script that runs in this game (m_bIsMission), or null: on the partner always its own side activity
 void* RunningMission();
 
+// partner: this player plays the host's rhythm contest (the host's game takes its pad; features/minigame answers)
+bool PlayingHostMinigame();
+
 }  // namespace coop

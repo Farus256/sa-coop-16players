@@ -13,6 +13,7 @@
 #include "entities/ped/Peds.h"
 #include "entities/player/Players.h"
 #include "entities/session/Flow.h"
+#include "features/minigame/Minigame.h"
 #include "features/revive/Revive.h"
 #include "features/shops/Shops.h"
 #include "features/story/missions/Missions.h"
@@ -389,6 +390,7 @@ bool OnKeyDown(int vk, bool repeat) {
     if (ui::TheChat().IsOpen()) return true;
     if (repeat) return false;
     if (vk == VK_ESCAPE && CutsceneSkipDecline()) return true;  // "watch on", not the pause menu
+    if (vk == 'Y' && !game::MenuActive() && minigame::KeyY()) return true;  // the host's rhythm contest is taken
     if ((vk == 'Y' || vk == 'N') && !game::MenuActive() && SideCallKey(vk == 'Y')) return true;  // a side activity's call
     if (vk == VK_F9) {
         ui::SetConnectMenuVisible(true);
