@@ -196,6 +196,7 @@ enum MsgId : uint8_t {
                               // a change and every 3 s while it is)
     G_SIDE = 171,             // reliable: u8 op (1 offer, 2 accept, 3 decline, 4 end, 5 leave), u8 to (a player, 255 all),
                               // str name (the side activity's mission script), i32 money (end: what it paid)
+    G_MONEY = 172,            // reliable, to one player: u8 op (1 a payment, 2 taken, 3 refused), u32 id, i32 amount (/pay)
 
     G_VOICE = 200,            // unreliable: voice frame
     G_LAST = 255,

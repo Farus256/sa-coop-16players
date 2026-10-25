@@ -323,6 +323,7 @@ Chat commands:
 | `/sync` | the sync's state: ping, the delay to each player, how many people and cars your game runs |
 | `/code <cheat>` | enter a cheat, for example `/code HESOYAM` |
 | `/pm <nick> <text>` | private message |
+| `/pay <nick> <amount>` | send a player money; it is taken from you once they get it |
 | `/kick <nick> [reason]` | host: kick a player |
 
 A unique beginning of a nickname is enough.
