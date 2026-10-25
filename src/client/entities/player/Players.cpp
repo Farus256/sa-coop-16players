@@ -219,7 +219,18 @@ void ApplyRemote(RemotePlayer& rp) {
     cam::Alpha() = c.alpha;
     cam::Beta() = c.beta;
     cam::Front() = c.front;
-    cam::Source() = rp.ped->GetPosition() + c.sourceOffset;
+    // The camera where its owner's is: from the owner's place now (its state, carried on by its speed over the
+    // network's delay), not the copy's, which follows a little behind. Its aim then is its owner's to the point, across
+    // and up and down: the copy's gun points where its owner's crosshair is, and its shots go along its owner's line
+    // (from the copy's place they went beside it, past a partner in front through the back of his head). A copy put
+    // elsewhere (a teleport, a car) keeps its own place.
+    CVector from = rp.ped->GetPosition();
+    if (rp.mode == RemotePlayer::Mode::OnFoot && !rp.ped->InVehicle()) {
+        float age = std::min(0.4f, (float)(NowMs() - rp.stateRecvMs) / 1000.0f + Net().LatencyFrom(rp.id));
+        CVector owner = rp.state.pos + rp.state.vel * age;
+        if ((owner - from).Length() < 3.0f) from = owner;
+    }
+    cam::Source() = from + c.sourceOffset;
     cam::Up() = c.up;
     cam::UseMouse3rdPerson() = c.useMouse3rd ? 1 : 0;
     cam::CrosshairMultX() = c.chairX;
@@ -712,6 +723,7 @@ void KeepDriversGoing() {
 // fewer than its owner fires the missing one itself (towards where its owner's camera looks), once its pad had its
 // chance. Its damage counts nowhere here (Damage drops a remote player's), its flash and its sound are what show.
 uint8_t g_localShots = 0;  // this game's player's shots, counted round
+uint32_t g_localShotsFlagsDummy = 0;
 bool CountedGun(int type) { return (type >= 22 && type <= 34) || type == 38; }  // the projectiles and fire go their own way
 
 using WeaponFireFn = bool(__fastcall*)(CWeapon*, void*, CEntity*, CVector*, CVector*, CEntity*, CVector*, CVector*);
@@ -741,7 +753,16 @@ bool __fastcall HookWeaponFire(CWeapon* w, void* edx, CEntity* by, CVector* star
             targetPos = &head;
         }
     }
+    // A copy's shot is only seen here (its owner's game decides what it hits): it goes through this game's player,
+    // whose place here differs from where its owner's game has it by the network's delay (a partner in front was
+    // "hit" in the back of the head by shots its owner put past him). Our player has no collision for it.
+    CPlayerPed* me = FindPlayerPed(0);
+    bool throughMe = me && by && by != (CEntity*)me && by->IsPed() && Players::Instance().FindByPed((CPed*)by);
+    uint32_t& meFlags = me ? me->Flags() : g_localShotsFlagsDummy;
+    bool hadCollision = throughMe && (meFlags & 1);  // CEntity::bUsesCollision
+    if (hadCollision) meFlags &= ~1u;
     bool fired = g_origWeaponFire(w, edx, by, start, barrel, target, targetPos, alt);
+    if (hadCollision) meFlags |= 1u;
     if (!fired || !by || !by->IsPed() || !CountedGun(type) || !Net().Online()) return fired;
     if (by == (CEntity*)FindPlayerPed(0) && !g_inRemoteContext) {
         ++g_localShots;
