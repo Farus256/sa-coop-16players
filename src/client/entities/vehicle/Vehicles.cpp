@@ -8,7 +8,6 @@
 #include "common/api/protocol/Protocol.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
-#include "entities/mission/Mission.h"
 #include "entities/ped/Peds.h"
 #include "entities/player/Players.h"
 #include "shared/api/net-session/Session.h"
@@ -571,9 +570,6 @@ void Vehicles::Drop(uint16_t netId) {
 
 std::vector<uint16_t> Vehicles::ClearMirrors(const CVector& at, float radius) {
     std::vector<uint16_t> ids;
-    // only where the mission puts its own: a clear of 500 or 1000 m took cars the other players had parked across the
-    // town, and out of their safe house garages too (issue #69: "the cars vanish")
-    radius = std::min(radius, 60.0f);
     for (auto& [id, nv] : m_byId) {
         CVehicle* v = nv.veh;
         // one the mission took for itself stays (CESAR1 stores the lowrider the partner drives, $8788: deleted here, the
@@ -581,9 +577,8 @@ std::vector<uint16_t> Vehicles::ClearMirrors(const CVector& at, float radius) {
         if (!IsMirror(nv) || nv.script || !IsVehicleValid(v) || v->Driver() || ScriptHolds(v)) continue;
         bool empty = true;
         for (int i = 0; i < 8; ++i) empty = empty && !v->Passengers()[i];
-        CVector p = v->GetPosition(), d = p - at;
-        if (empty && d.x * d.x + d.y * d.y < radius * radius && !Call<0x448900, bool>(&p))  // CGarages::IsPointWithinHideOutGarage
-            ids.push_back(id);
+        CVector d = v->GetPosition() - at;
+        if (empty && d.x * d.x + d.y * d.y < radius * radius) ids.push_back(id);
     }
     for (uint16_t id : ids) Forget(id, true);
     return ids;
@@ -622,9 +617,6 @@ bool Vehicles::KeepsWhenDeleted(const NetVehicle& nv) const {
     CPlayerPed* me = FindPlayerPed(0);
     CVehicle* v = nv.veh;
     if (!me || !IsMirror(nv) || !IsVehicleValid(v) || nv.script || v->Status() == STATUS_WRECKED || ScriptHolds(v)) return false;
-    // the host's mission clears the ground of its scene (CLEAR_AREA of the lowrider contest): a car kept here came
-    // back there as ours, into the middle of it
-    if (!Net().IsHost() && HostMissionRecent(0)) return false;
     int type = v->VehicleSubClass();
     bool aircraft = type == VEHICLE_TYPE_HELI || type == VEHICLE_TYPE_PLANE || type == VEHICLE_TYPE_FHELI || type == VEHICLE_TYPE_FPLANE;
     float mine = (v->GetPosition() - me->GetPosition()).Length();
@@ -651,11 +643,11 @@ void Vehicles::HandleRemove(uint8_t from, Reader& r) {
     }
     // Its owner deleted it with our player riding inside ("Home Invasion" deletes the van at the lockup): ours stayed in
     // it as its own car, jammed in a garage door that is shut here, and fell through the floor. Out next to its owner's
-    // player, the mission put that one where the scene goes on; still in the van in its last state, it is about to be
-    // put there (the van out of reach of the end's scene left the partner in the lockup, not watching it).
+    // player, the mission put that one where the scene goes on.
     if (me && IsVehicleValid(nv->veh) && me->InVehicle() && me->Vehicle() == nv->veh && nv->veh->Driver() != me) {
         CVector p = nv->veh->GetPosition();
-        if (const RemotePlayer* rp = Players::Instance().Get(from); rp && rp->hasState && (rp->state.pos - p).Length() < 100.0f)
+        if (const RemotePlayer* rp = Players::Instance().Get(from);
+            rp && rp->hasState && rp->mode == RemotePlayer::Mode::OnFoot && (rp->state.pos - p).Length() < 50.0f)
             p = rp->state.pos + CVector{1.0f, 0.0f, 0.0f};
         Cmd(0x0362).I(GetPedRef(me)).F(p.x).F(p.y).F(p.z - 1.0f).Run();  // WARP_CHAR_FROM_CAR_TO_COORD (feet)
         LOGI("Vehicle %04X: its owner deleted it with us inside: out by its player", id);
@@ -859,9 +851,7 @@ void Vehicles::HandleOwner(uint8_t from, Reader& r) {
         return;
     }
     if (iDrive && owner != Net().MyId()) {
-        // the host keeps it (the server makes any player the host, player 1 too), between others the lower id
-        bool theyKeep = from == owner && !Net().IsHost() && (owner == Net().HostId() || owner < Net().MyId());
-        if (!theyKeep) {
+        if (owner > Net().MyId() || from != owner) {
             // we are driving it right now: keep ownership, tell the others again
             Writer w(proto::G_VEH_OWNER);
             w.U16(id);
@@ -871,7 +861,7 @@ void Vehicles::HandleOwner(uint8_t from, Reader& r) {
         }
         // It drives it too, in its game (both took the seat at once, or it pulled us out and our game never saw it).
         // Each kept answering the other's claim while both drove, each showed the other standing frozen beside the car.
-        // Our player gives way and sits beside it if there is room.
+        // The lower id keeps it (the host); our player gives way and sits beside it if there is room.
         int h = GetPedRef(me);
         CVector p = me->GetPosition();
         Cmd(0x0362).I(h).F(p.x).F(p.y).F(p.z + 1.0f).Run();  // WARP_CHAR_FROM_CAR_TO_COORD
@@ -1070,10 +1060,10 @@ void Vehicles::ApplyMirror(NetVehicle& nv, float dt) {
     v->SteerAngle() = nv.steerShown;
     v->GasPedal() = st.gas;
     v->BrakePedal() = st.brake;
-    // CVehicle::bIsHandbrakeOn as its owner's: left on here (parked, or a car this game's player got out of), it held the
-    // copy's rear wheels for good, and the car went on with its brake lights lit and its tyres smoking as if it braked
-    if (st.flags & VehicleState::F_HANDBRAKE) v->VehicleFlagsLo() |= 0x20u;
-    else v->VehicleFlagsLo() &= ~0x20u;
+    // The handbrake as the owner's. Nothing clears it on a copy (only a player's car takes it from the pad, CAutomobile::
+    // ProcessControlInputs), and once this game set it (a player's copy getting in) a car with a passenger went on with
+    // its wheels locked, a bike bent over, for the other players.
+    v->SetHandbrake((st.flags & VehicleState::F_HANDBRAKE) != 0);
     v->Health() = st.health;
     v->SetEngineOn((st.flags & VehicleState::F_ENGINE) != 0);
     v->SetSiren((st.flags & VehicleState::F_SIREN) != 0);
@@ -1277,6 +1267,7 @@ void Vehicles::OnPostProcess() {
             if (nv.hasState) {
                 nv.veh->SteerAngle() = nv.steerShown;
                 nv.veh->BrakePedal() = nv.state.brake;
+                nv.veh->SetHandbrake((nv.state.flags & VehicleState::F_HANDBRAKE) != 0);
                 ApplyParts(nv.veh, nv.state);  // the step just leaned a bike again by its speed change
                 // CHeli::ProcessControl just switched its searchlight off (no police AI, no player here) and
                 // CHeli::PreRender (0x6C5420) adds the light to this frame at night: as the owner's

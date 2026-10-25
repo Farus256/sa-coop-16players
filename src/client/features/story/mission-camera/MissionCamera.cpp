@@ -6,6 +6,12 @@
 // seat), its controls are held while the scene lasts, and the camera comes back to the player when the host's does
 // (or when the host's mission is over). The subtitles, the voices and the widescreen borders of such scenes come as
 // they did before (Missions).
+//
+// A host in a car with no free seat (the mission's people fill it: "Drive-Thru", "Drive-By") takes nobody into its
+// scene: the partner was taken out of its own car, stood by his and held there, and the car drove off without it. It
+// keeps its camera, its car and its controls and follows him. The host's camera given back while a cutscene still
+// played here (it ends a moment later than the host's) was dropped with the rest, and the partner stood held until the
+// end of the mission: now the hold goes with it, and with any giving back of this game's camera (the cutscene's end).
 #include <cmath>
 
 #include "common/api/protocol/Protocol.h"
@@ -29,7 +35,10 @@ using game::script::Cmd;
 
 enum : uint8_t { OP_FIXED = 1, OP_POINT = 2, OP_ENTITY = 3, OP_RESTORE = 4, OP_MOVE = 5, OP_TRACK = 6, OP_FOV = 7 };
 enum : uint8_t { TARGET_PLAYER = 1, TARGET_PED = 2, TARGET_VEHICLE = 3 };
-constexpr int kScriptControl = 2;               // CCamera's whoIsInControlOfTheCamera: a script
+// CCamera's whoIsInControlOfTheCamera: a script, as the script commands pass it (POINT_CAMERA_AT_POINT 0x47C5EC). It
+// was 2, the cinematic camera's (Obbe), and CCamera::CamControl gives that one back in its very frame (0x52B64F) when
+// no cinematic camera may run: the partner's camera came straight back, its controls stayed held to the mission's end
+constexpr int kScriptControl = 1;
 constexpr uint16_t kOwnControls = 0x4000;        // our bit of CPad::DisablePlayerControls
 constexpr float kBringFrom = 20.0f;              // a partner further than this from the host is brought to him
 void* Camera() { return (void*)addr::TheCamera; }
@@ -93,7 +102,9 @@ void __fastcall HookEntity(void* cam, void* edx, CEntity* target, int mode, int 
 
 using VoidFn = void(__fastcall*)(void*, void*);
 VoidFn g_origRestore = nullptr, g_origRestoreCut = nullptr;
+void Let();
 void SendRestore(bool cut) {
+    Let();  // partner: this game's camera is given back (a cutscene's end), the host's scene holds it no more
     if (!Ours()) return;
     Writer w(proto::G_SCRIPT_CAM);
     w.U8(OP_RESTORE);
@@ -154,6 +165,26 @@ void Hold(bool on) {
     else pad->DisablePlayerControls &= (uint16_t)~kOwnControls;
 }
 
+// the scene is over here without a word of the camera: the controls come back, the camera is as it is
+void Let() {
+    if (!g_active || Net().IsHost()) return;
+    g_active = false;
+    Hold(false);
+    LOGI("Host's scene: our camera was given back here, our control too");
+}
+
+// the host sits in a car whose seats are all taken (by the mission's people) and we are not in it: no place for us in
+// his scene, we go on our own
+bool NoSeatByHost() {
+    RemotePlayer* host = Players::Instance().Get(Net().HostId());
+    CPlayerPed* me = FindPlayerPed(0);
+    CVehicle* v = host && host->ped ? host->ped->VehicleIfIn() : nullptr;
+    if (!v || !me || me->VehicleIfIn() == v) return false;
+    for (int s = 0; s < v->MaxPassengers() && s < 8; ++s)
+        if (!v->Passengers()[s]) return false;
+    return true;
+}
+
 // next to the host (in his car, when it has a free seat), as the scene starts
 void Bring() {
     RemotePlayer* host = Players::Instance().Get(Net().HostId());
@@ -181,13 +212,21 @@ void Bring() {
     LOGI("Host's scene: brought next to the host");
 }
 
-void Begin() {
+// false: this scene is not ours (the host's car is full)
+bool Begin() {
     g_activeMs = NowMs();
-    if (g_active) return;
+    if (g_active) return true;
+    if (NoSeatByHost()) {
+        static uint64_t saidMs = 0;
+        if (NowMs() - saidMs > 5000) LOGI("Host's scene: his car is full, we keep our camera and control");
+        saidMs = NowMs();
+        return false;
+    }
     g_active = true;
     Bring();
     Hold(true);
     LOGI("Host's scene: the camera follows the host's");
+    return true;
 }
 
 void End(bool cut) {
@@ -218,21 +257,23 @@ CEntity* Target(uint8_t kind, uint16_t id) {
 }
 
 void HandleCam(uint8_t from, Reader& r) {
-    if (from != Net().HostId() || Net().IsHost() || !core::IsPlayerReady() || Ref<uint8_t>(0xB5F851)) return;  // a cutscene
+    if (from != Net().HostId() || Net().IsHost()) return;
     uint8_t op = r.U8();
+    if (!core::IsPlayerReady() || Ref<uint8_t>(0xB5F851)) {  // a cutscene: its end gives the camera back itself
+        if (op == OP_RESTORE) Let();
+        return;
+    }
     switch (op) {
         case OP_FIXED: {
             CVector pos = G(r.Vec()), up = G(r.Vec());
-            if (!r.Ok()) return;
-            Begin();
+            if (!r.Ok() || !Begin()) return;
             CallMethod<0x50BEC0>(Camera(), &pos, &up);  // CCamera::SetCamPositionForFixedMode
             break;
         }
         case OP_POINT: {
             CVector at = G(r.Vec());
             int sw = r.U8();
-            if (!r.Ok()) return;
-            Begin();
+            if (!r.Ok() || !Begin()) return;
             CallMethod<0x50C8B0>(Camera(), &at, sw, kScriptControl);  // CCamera::TakeControlNoEntity
             break;
         }
@@ -241,8 +282,7 @@ void HandleCam(uint8_t from, Reader& r) {
             uint16_t id = r.U16();
             int mode = r.U16(), sw = r.U8();
             CVector at = G(r.Vec());
-            if (!r.Ok()) return;
-            Begin();
+            if (!r.Ok() || !Begin()) return;
             if (CEntity* e = Target(kind, id)) CallMethod<0x50C7C0>(Camera(), e, mode, sw, kScriptControl);  // CCamera::TakeControl
             else CallMethod<0x50C8B0>(Camera(), &at, sw, kScriptControl);  // no copy of it here: where it is
             break;
@@ -257,8 +297,7 @@ void HandleCam(uint8_t from, Reader& r) {
             CVector to = G(r.Vec()), fromV = G(r.Vec());
             float ms = r.F32();
             bool ease = r.U8() != 0;
-            if (!r.Ok()) return;
-            Begin();
+            if (!r.Ok() || !Begin()) return;
             if (op == OP_MOVE) CallMethod<0x50D160>(Camera(), &to, &fromV, ms, ease);  // CCamera::VectorMoveLinear
             else CallMethod<0x50D1D0>(Camera(), &to, &fromV, ms, ease);                // CCamera::VectorTrackLinear
             break;
@@ -266,7 +305,7 @@ void HandleCam(uint8_t from, Reader& r) {
         case OP_FOV: {
             float a = r.F32(), b = r.F32(), ms = r.F32();
             bool ease = r.U8() != 0;
-            if (r.Ok()) CallMethod<0x50D280>(Camera(), a, b, ms, ease);  // CCamera::LerpFOV
+            if (r.Ok() && g_active) CallMethod<0x50D280>(Camera(), a, b, ms, ease);  // CCamera::LerpFOV (not on a camera of our own)
             break;
         }
     }
