@@ -3,7 +3,7 @@
 // finds it there, and the race is won when CJ's last one comes before the others'. The partners see the host's
 // checkpoints and blips already (Missions), but they counted for nothing. Now CJ's checkpoint counts as reached when a
 // partner drives through it too: the team goes on with whoever is ahead, and a partner first over the line wins the race
-// for the host. When the race starts, each partner who is not driving gets a car of the host's model next to it.
+// for the host. When the race starts, each partner who is not driving is seated in a car of the host's model behind it.
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -123,7 +123,7 @@ void HostFrame() {
 }
 
 // ---------------------------------------------------------------- partner
-// a car of the host's for this player, behind it (the racers stand side by side at the start)
+// a car of the host's model for this player, behind it (the racers stand side by side at the start), with this player seated in it
 void GiveCar(int model) {
     CPlayerPed* me = FindPlayerPed(0);
     if (!me || model <= 0 || !IsVehicleModel(model)) return;
@@ -141,9 +141,14 @@ void GiveCar(int model) {
     if (car < 0) return;
     Cmd(0x0175).I(car).F(h * 57.29578f).Run();  // SET_CAR_HEADING
     Cmd(0x01C3).I(car).Run();                   // MARK_CAR_AS_NO_LONGER_NEEDED: an ordinary car from now on
-    ui::TheChat().AddSystem(TR("Позади вас машина для гонки. Садитесь: точки хоста считаются и за вас.",
-                               "There is a car behind you for the race. Get in: the host's checkpoints count for you too."));
-    LOGI("Race: a car (model %d) for this player", model);
+    // straight to its wheel: getting out of the host's car and into this one took the countdown and more
+    int self = GetPedRef(me);
+    if (me->InVehicle()) Cmd(0x0362).I(self).F(p.x).F(p.y).F(p.z + 1.0f).Run();  // WARP_CHAR_FROM_CAR_TO_COORD
+    Cmd(0x036A).I(self).I(car).Run();                                            // WARP_CHAR_INTO_CAR
+    Cmd(0x0373).Run();                                                           // SET_CAMERA_BEHIND_PLAYER
+    ui::TheChat().AddSystem(TR("Вы за рулём своей машины для гонки: точки хоста считаются и за вас.",
+                               "You are at the wheel of your own car for the race: the host's checkpoints count for you too."));
+    LOGI("Race: a car (model %d) for this player, seated in it", model);
 }
 
 void Handle(uint8_t from, Reader& r) {
