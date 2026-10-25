@@ -216,6 +216,10 @@ void __cdecl HookPossiblyRemoveVehicle(CVehicle* v) {
         if (const CVector* r = NearestRemote(v->GetPosition(), 140.0f, v->AreaCode(), &who)) {
             float local = (v->GetPosition() - FindPlayerPed(0)->GetPosition()).Length2D();
             if (local < 100.0f) return;
+            // An empty parked car (a car generator's) stays here while the other player is near. Handed over, it left
+            // its generator without a car, the generator made the same one again on the next pass, and that went over
+            // too: a Sadler every 0.25 s for as long as the other player stood there.
+            if (v->CreatedBy() == 3 /* VEHICLE_CREATED_PARKED */ && !v->Driver()) return;
             if ((v->GetPosition() - *r).Length2D() < local - 40.0f && CanTake(who) && Vehicles::Instance().QueueGiveAway(v, who))
                 return;
         }
