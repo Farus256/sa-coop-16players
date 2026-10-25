@@ -11,8 +11,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <climits>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -119,16 +117,6 @@ int __fastcall HookBeatPlayTime(void* thread, void* edx) {
     return ms < 0 || !g_judgeShiftMs ? ms : std::max(0, ms - (int)g_judgeShiftMs);
 }
 
-// How far the nearest beat is from now, in ms (+ ahead, - gone); INT32_MIN without a beat track
-int NearestBeatMs() {
-    void* info = CallMethod<0x5071B0, void*>((void*)0xB6BC90);  // CAudioEngine::GetBeatInfo (AudioEngine)
-    if (!info || !Field<int32_t>(info, 0xA0)) return INT32_MIN;  // tBeatInfo: no track
-    int prev = Field<int32_t>(info, 0x48), next = Field<int32_t>(info, 0x50);  // the beat before and after now
-    return std::abs(prev) < std::abs(next) ? prev : next;
-}
-
-bool g_stickOut = false;  // the player's right stick out as far as LOWGAME counts it (beyond 64)
-
 void ContestKeys();
 
 // right after the game read the pads: the host's pad 0 is the player's who plays the contest
@@ -138,16 +126,7 @@ void __cdecl HookUpdatePads() {
     if (!Delegated() || !Net().Online()) return;
     RemotePlayer* rp = Players::Instance().Get(g_player);
     if (!rp || !rp->hasState || NowMs() - rp->stateRecvMs > 1000) return;
-    const PadState& pad = rp->state.pad;
-    pad.To(GetPad(0)->NewState);
-    // each push against the beat as the judging gets it: how well the delay matches that player's
-    bool out = (float)pad.rx * pad.rx + (float)pad.ry * pad.ry > 64.0f * 64.0f;
-    if (out && !g_stickOut)
-        if (int beat = NearestBeatMs(); beat != INT32_MIN) {
-            uint32_t delay = JudgeDelayMs();
-            LOGI("Rhythm contest: a push %+d ms from the beat here, %+d judged (delay %u ms)", beat, beat + (int)delay, delay);
-        }
-    g_stickOut = out;
+    rp->state.pad.To(GetPad(0)->NewState);
 }
 
 void Send(uint8_t op, uint8_t value = 0) {
@@ -255,16 +234,10 @@ void ContestKeys() {
     if (down(VK_NUMPAD6, VK_RIGHT) || down(VK_NUMPAD9, VK_PRIOR) || down(VK_NUMPAD3, VK_NEXT)) x += 128;
     if (down(VK_NUMPAD8, VK_UP) || down(VK_NUMPAD7, VK_HOME) || down(VK_NUMPAD9, VK_PRIOR)) y -= 128;
     if (down(VK_NUMPAD2, VK_DOWN) || down(VK_NUMPAD1, VK_END) || down(VK_NUMPAD3, VK_NEXT)) y += 128;
+    if (!x && !y) return;
     CControllerState& s = GetPad(0)->NewState;
-    if (x || y) {
-        s.RightStickX = (int16_t)x;
-        s.RightStickY = (int16_t)y;
-    }
-    // each push as it leaves this game, to compare with the host's log
-    static bool out = false;
-    bool now = (float)s.RightStickX * s.RightStickX + (float)s.RightStickY * s.RightStickY > 64.0f * 64.0f;
-    if (now && !out) LOGI("Rhythm contest: a push %d %d%s", s.RightStickX, s.RightStickY, x || y ? " (keys)" : "");
-    out = now;
+    s.RightStickX = (int16_t)x;
+    s.RightStickY = (int16_t)y;
 }
 
 void StopPlaying() {

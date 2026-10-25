@@ -942,15 +942,6 @@ void ApplyHydraulics(CVehicle* v, const VehicleState& st) {
         wheel[3] = std::max(0.0f, rr);
     }
     bool active = st.misc != 0 || wheel[0] + wheel[1] + wheel[2] + wheel[3] > 0.0f;
-    // the lowrider contest showed the copy flying above its owner's car: how far apart and what the wheels do then
-    float zHere = v->GetPosition().z, vzHere = v->MoveSpeed().z * 50.0f;
-    static uint64_t loggedMs = 0;
-    if ((std::fabs(zHere - st.pos.z) > 1.0f || std::fabs(st.vel.z) > 3.0f) && NowMs() - loggedMs > 250) {
-        loggedMs = NowMs();
-        LOGI("Hydraulics of player %d's car: z here %.2f, owner %.2f; vz here %.2f, owner %.2f; wheels %.2f %.2f %.2f %.2f, "
-             "misc %u, jump %d", rp->id, zHere, st.pos.z, vzHere, st.vel.z, wheel[0], wheel[1], wheel[2], wheel[3], st.misc,
-             (pad.buttons & PadState::B_SHOCKR) != 0);
-    }
     int8_t slot = Field<int8_t>(v, 0x48B);  // CVehicle::m_vehicleSpecialColIndex
     if (active && slot < 0 && CallMethod<0x6DF3D0, bool>(v)) slot = Field<int8_t>(v, 0x48B);  // GetSpecialColModel
     if (slot >= 0 && slot < 4) memcpy((void*)(0xC1CB60 + (uintptr_t)slot * 0x28 + 0x18), wheel, sizeof(wheel));

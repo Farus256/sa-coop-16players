@@ -74,6 +74,12 @@ in "Are You Going To San Fierro?". The partner can also take the photos a missio
 killed during a mission comes back next to the host. If the host gets on a bike or into a vehicle with no seat
 left, the same kind of vehicle appears next to the partner.
 
+The lowrider contest in "Cesar Vialpando" can be played by a partner instead of the host: when the show starts,
+the first partner to press Y within 10 seconds plays it. Their game shows the arrows, and their right stick (the
+numpad or the arrow keys on a keyboard) plays the host's car, timed for the delay between the two games. In the
+story's races a checkpoint counts for whichever player drives through it first, so a partner who crosses the line
+first wins the race for the host. When the race starts, each partner is seated in a car of the host's model.
+
 | The host stands in the marker | The partner sees that the host is waiting |
 |---|---|
 | ![The host waits for the partner in the marker](docs/images/en/marker-host.jpg) | ![The partner is told that the host waits at the marker](docs/images/en/marker-partner.jpg) |
