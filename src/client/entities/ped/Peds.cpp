@@ -169,6 +169,9 @@ void* FindTask(CPed* ped, int type) {
 // Full-body animations while moving are turns and start/stop steps, also locomotion. A partial one (a punch, a guard)
 // plays over a full-body one (the fight stance) and is the action while it lasts: the mirror keeps the stance under it.
 void CaptureAnim(CPed* ped, PedSyncState& s) {
+    // getting in or out of a car: the copy does it with its own task (F_LEAVING, the enter tasks), and the owner's door
+    // and seat animations on top of it played twice (Ryder out of the van in "Home Invasion")
+    if (FindTask(ped, TASK_LEAVE_CAR) || FindTask(ped, TASK_ENTER_CAR_AS_DRIVER) || FindTask(ped, TASK_ENTER_CAR_AS_PASSENGER)) return;
     int motion = Field<int32_t>(ped, 0x4D4);
     bool still = ped->MoveState() <= PEDMOVE_STILL;
     void* best = nullptr;
@@ -602,7 +605,8 @@ void Peds::ScanOwned() {
 
     // peds this game would have dropped (CPopulation::ManagePed) while the partner is nearer go to the partner's game
     for (auto& [ped, to] : m_giveAway)
-        if (NetPed* np = IsPedValid(ped) ? Find(ped) : nullptr; np && np->owner == myId && IsAlive(*np)) GiveAway(np->netId, to);
+        if (NetPed* np = IsPedValid(ped) ? Find(ped) : nullptr; np && np->owner == myId && IsAlive(*np) && !IsPedDead(ped))
+            GiveAway(np->netId, to);
     m_giveAway.clear();
 
     // the interiors' people this game made for itself that are gone (their handles may come back as other peds)
@@ -644,6 +648,15 @@ void Peds::ScanOwned() {
         float d = RemoteDistance(ped->GetPosition(), AreaOf(ped));
         if (!np) {
             if (d > SyncIn(ped)) continue;
+            // a body, or one fading out: the copy of a body its owner removed stays here as this game's (HandleRemove).
+            // Announced, it came back to its owner's game standing, died there again and dropped its money each time.
+            if (IsPedDead(ped) || (ped->PedFlags2() & 8)) continue;  // CPed::bFadeOut
+            // The people a house brings (InteriorGroup_c::SetupPeds: area 0, high up) are made when the player stands
+            // under it outside: during the host's mission those of an interior the host is not in stay out of the
+            // partner's game ("Home Invasion": a family in the colonel's house, cleared by the mission as its player comes in)
+            if (Net().IsHost() && HostReplicating() && ped->CreatedBy() == 1 /* PED_GAME */ && ped->AreaCode() == 0 &&
+                ped->GetPosition().z > 500.0f && (!me || me->AreaCode() == 0))
+                continue;
             // made by a script each game runs for its own player (MarkLocal); one that drives off is ours to show, and a
             // side job's people (a taxi fare, the vigilante's criminals) are shown out in the street
             if (auto it = m_local.find(GetPedRef(ped)); it != m_local.end() && !ped->InVehicle() && (!it->second || AreaOf(ped) != 0))
@@ -702,6 +715,27 @@ static bool FreeRandomPed() {
     return true;
 }
 
+// A copy of one of the other game's passers-by makes room for a copy of its mission's people: the farthest, out of view.
+// It comes back once there is room.
+bool Peds::EvictRandomCopy() {
+    CPlayerPed* me = FindPlayerPed(0);
+    NetPed* far = nullptr;
+    float farD = 0.0f;
+    for (auto& [id, np] : m_byId) {
+        if (np.owner == Net().MyId() || !IsAlive(np) || np.pedType >= 24 /* PED_TYPE_MISSION1.. */ ||
+            (np.model >= kSpecialFirst && np.model <= kSpecialLast) || np.ped->InVehicle() || CallMethod<0x534540, bool>(np.ped))
+            continue;  // GetIsOnScreen
+        if (float d = (np.ped->GetPosition() - me->GetPosition()).Length(); d > farD) farD = d, far = &np;
+    }
+    if (!far) return false;
+    LOGD("Ped pool full: the copy %04X %.0f m away makes room for a mission's", far->netId, farD);
+    Cmd(0x009B).I(far->handle).Run();  // DELETE_CHAR
+    m_byPtr.erase(far->ped);
+    far->ped = nullptr;
+    far->handle = -1;
+    return true;
+}
+
 CPed* Peds::SpawnMirror(NetPed& np) {
     const PedSyncState& st = np.state;
     int model = np.model;
@@ -721,7 +755,11 @@ CPed* Peds::SpawnMirror(NetPed& np) {
         RequestModel(model, 0);
         return nullptr;
     }
-    if (!HasRoom(PedPool(), kKeepPeds, "ped") && !FreeRandomPed()) return nullptr;
+    // the other game's passers-by leave room for its mission's people: the soldiers of "Robbing Uncle Sam", announced last,
+    // never came while the street's copies filled the pool
+    bool missionPed = np.pedType >= 24 /* PED_TYPE_MISSION1.. */ || (np.model >= kSpecialFirst && np.model <= kSpecialLast);
+    if (!HasRoom(PedPool(), missionPed ? kKeepPeds : kKeepPeds + 6, "ped") && !FreeRandomPed() && !(missionPed && EvictRandomCopy()))
+        return nullptr;
     // A copy is of its owner's type where the class stays a civilian's (CREATE_CHAR makes a CCivilianPed for all but
     // cops, medics and firemen, whose classes bring their own AI): gang members, dealers, criminals, hookers and bums of
     // the other game were plain civilians to this game's gangs, and no fight between the two games' people ever began.
@@ -801,6 +839,7 @@ void Peds::HandleRemove(uint8_t from, Reader& r) {
     }
     // a body: its owner fades it out (CPed::bFadeOut) before it goes; deleted here at once, it vanished in a blink
     if (NetPed& np = it->second; IsAlive(np) && IsPedDead(np.ped) && !np.ped->InVehicle()) {
+        np.ped->Money() = 0;  // this game's own ped from now on: its death task would drop the money again
         Cmd(0x034F).I(np.handle).Run();  // REMOVE_CHAR_ELEGANTLY
         return Forget(id, false);
     }
@@ -808,6 +847,12 @@ void Peds::HandleRemove(uint8_t from, Reader& r) {
 }
 
 bool Peds::CanGiveAwayType(const NetPed& np) {
+    // One with a script brain stays with its game (the cashier of a food place, Ammu-Nation's seller, the barber, the
+    // tattooist: the population put it at its attractor and the brain runs it): handed to the other player's game as the
+    // owner walked out, it stood there as a copy with neither, the attractor looked empty, and that game put its own
+    // cashier beside it
+    if (np.ped && ((Field<uint8_t>(np.ped, 0x476) & 0x80) || (Field<uint8_t>(np.ped, 0x477) & 1)))  // bHasAScriptBrain, bWaitingForScriptBrainToLoad
+        return false;
     return np.pedType != PED_TYPE_COP && np.pedType != PED_TYPE_MEDIC && np.pedType != PED_TYPE_FIREMAN;
 }
 
@@ -1108,6 +1153,7 @@ void Peds::ApplyMirror(NetPed& np) {
     const PedSyncState& st = np.state;
     uint64_t now = NowMs();
     if (!np.ped) {
+        if (np.deadApplied) return;  // a body the game took away: made again, it stood up and died once more
         if (now - np.lastTaskMs >= 100 && WantMirror(np)) {
             np.lastTaskMs = now;
             SpawnMirror(np);
@@ -1314,9 +1360,12 @@ void Peds::ApplyMirror(NetPed& np) {
     CVector cur = ped->GetPosition();
     CVector err = target - cur;
     float d = err.Length2D();
+    // on a car as its owner's (ATTACH_CHAR_TO_CAR, the girl beside CJ in his lowrider at Cesar's meet): the attachment
+    // places it, its animations still play
+    bool onCar = ped->AttachedTo() != nullptr;
     // In the air in its game (a SWAT officer on its helicopter's rope, a fall): gravity pulled the copy down here and the
     // 4 m rule below put it back up, again and again. It hangs where its owner is until that lands.
-    if (err.z > 1.0f || np.hanging) {
+    if (!onCar && (err.z > 1.0f || np.hanging)) {
         bool found = false;
         float ground = Call<0x5696C0, float>(target.x, target.y, target.z, &found, (CEntity**)nullptr);  // CWorld::FindGroundZFor3DCoord
         bool was = np.hanging;
@@ -1330,7 +1379,7 @@ void Peds::ApplyMirror(NetPed& np) {
             return;
         }
     }
-    if (d > 6.0f || std::fabs(err.z) > 4.0f) {
+    if (!onCar && (d > 6.0f || std::fabs(err.z) > 4.0f)) {
         Cmd(0x00A1).I(np.handle).F(target.x).F(target.y).F(target.z - 1.0f).Run();  // SET_CHAR_COORDINATES
         np.lastTaskMove = 0;
         np.gunMode = 0;
@@ -1418,8 +1467,10 @@ void Peds::ApplyMirror(NetPed& np) {
         }
         np.animFull = np.baseBlock != kNoAnim;  // a full-body action holds it, also under an overlay
     }
+    if (onCar) return;
     if (np.animFull) {  // a full-body action plays: hold the position without locomotion tasks
-        if (d > 0.25f) SetEntityPosition(ped, cur + CVector{err.x * 0.2f, err.y * 0.2f, 0});
+        if (d > 2.0f) SetEntityPosition(ped, CVector{target.x, target.y, cur.z});  // a scene's warp: there at once
+        else if (d > 0.25f) SetEntityPosition(ped, cur + CVector{err.x * 0.2f, err.y * 0.2f, 0});
         ped->CurrentRotation() = ped->AimingRotation() = LerpAngle(ped->CurrentRotation(), st.heading, 0.2f);
         return;
     }
@@ -1549,6 +1600,21 @@ void Peds::DropMirrorsOf(uint8_t id, bool keep) {
         if (adopt) Adopt(np);
         Forget(pid, !adopt);
     }
+}
+
+bool Peds::SeatClaimed(CVehicle* v, int seat) {
+    NetVehicle* nv = Vehicles::Instance().Find(v);
+    if (!nv) return false;
+    uint64_t now = NowMs();
+    for (auto& [id, np] : m_byId) {
+        if (np.owner == Net().MyId() || !np.hasState || now - np.recvMs > 3000) continue;
+        const PedSyncState& st = np.state;
+        if (!(st.flags & (PedSyncState::F_IN_VEHICLE | PedSyncState::F_ENTERING)) || st.vehNetId != nv->netId || st.seat != seat)
+            continue;
+        if (IsAlive(np) && np.ped->InVehicle() && np.ped->Vehicle() == v) continue;  // already there: the seat shows it
+        return true;
+    }
+    return false;
 }
 
 void Peds::MarkLocal(CPed* ped, bool sideJob) {

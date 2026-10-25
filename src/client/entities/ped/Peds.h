@@ -147,6 +147,10 @@ public:
     // a script that runs in each game for its own player made this ped (a shop's seller, the range's shooters, a
     // casino's dealers, an airport's guard): it stays this game's own (sideJob: a side job's, kept local only indoors)
     void MarkLocal(game::CPed* ped, bool sideJob);
+    // a copy of the other game's ped sits on this seat of the car in its owner's game, or goes for it (seat -1: the
+    // driver's), while the copy here is not there yet: Ryder sat beside the host there, his copy still walked here, and
+    // our player took his seat ("Ryder sank into the ground")
+    bool SeatClaimed(game::CVehicle* v, int seat);
 
 private:
     void ScanOwned();
@@ -163,6 +167,7 @@ private:
     void HandleAsk(uint8_t from, Reader& r);
     void Recruit(NetPed& np);
     void ApplyMirror(NetPed& np);
+    bool EvictRandomCopy();
     game::CPed* SpawnMirror(NetPed& np);
     void Forget(uint16_t netId, bool deletePed);
     void Adopt(NetPed& np);

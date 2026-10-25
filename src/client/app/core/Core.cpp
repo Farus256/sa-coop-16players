@@ -3,6 +3,8 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 
 #include "app/crash-handler/CrashHandler.h"
 #include "app/patches/Patches.h"
@@ -66,19 +68,44 @@ void __fastcall HookGenerateGameFilename(void* self, void* edx, int slot, char* 
 
 void CommonFrame();
 
+// A frame of over half a second, or over 0.7 s from the last one (the 1-2 s lags players report), goes into the log
+// with where its time went: our modules before or after the game's own process, the game's process (its streaming,
+// its scripts), or neither (drawing, a world load)
+uint64_t g_lastFrameMs = 0;  // when the last frame (or the menu's) began
+void RunModules(bool pre, const char*& slowest, uint64_t& slowestMs) {
+    for (auto* m : Modules()) {
+        uint64_t a = NowMs();
+        if (pre) m->OnPreProcess();
+        else m->OnPostProcess();
+        if (uint64_t d = NowMs() - a; d > slowestMs) slowestMs = d, slowest = m->Name();
+    }
+}
+
 void __cdecl HookGameProcess() {
     ++g_frameNo;
+    uint64_t t0 = NowMs(), gap = g_lastFrameMs ? t0 - g_lastFrameMs : 0;
+    g_lastFrameMs = t0;
+    const char* slowest = "-";
+    uint64_t slowestMs = 0;
     CommonFrame();
-    for (auto* m : Modules()) m->OnPreProcess();
+    RunModules(true, slowest, slowestMs);
+    uint64_t t1 = NowMs();
     g_origGameProcess();
+    uint64_t t2 = NowMs();
     // The frame a new game's player is made in (MAIN's CREATE_PLAYER): the game starts for the modules next frame
     // (OnGameStarted, G_RESYNC), and what they announced in this one was forgotten here and made twice there.
-    if (!g_gameStarted && IsPlayerReady()) return;
-    for (auto* m : Modules()) m->OnPostProcess();
+    if (g_gameStarted || !IsPlayerReady()) RunModules(false, slowest, slowestMs);
+    uint64_t t3 = NowMs();
+    if (IsPlayerReady() && (t3 - t0 > 500 || gap > 700))
+        LOGW("Long frame: %u ms from the last one, %u ms its process: ours %u before the game's and %u after (slowest %s %u), "
+             "the game's %u",
+             (unsigned)gap, (unsigned)(t3 - t0), (unsigned)(t1 - t0), (unsigned)(t3 - t2), slowest, (unsigned)slowestMs,
+             (unsigned)(t2 - t1));
 }
 
 void __fastcall HookMenuProcess(void* self, void* edx) {
     g_origMenuProcess(self, edx);
+    g_lastFrameMs = NowMs();  // a pause in the menu is no lag
     // FrontendIdle: CGame::Process is not running
     if (game::GameState() != game::GAME_STATE_IDLE) {
         ++g_frameNo;
@@ -377,8 +404,42 @@ void RequestScreenshot(const std::string& bmpPath, bool withOverlay, int scale, 
 void ShowConnectMenu(bool show) { ui::SetConnectMenuVisible(show); }
 bool ConnectMenuVisible() { return ui::IsConnectMenuVisible(); }
 
+// The game's cheat codes with a T after their first letter (the letter codes and the phrases of the same hashes, all
+// checked against CCheat::m_aCheatHashKeys): the chat key T in the middle of one is the code's (issue #69)
+const char* const kCheatsWithT[] = {
+    "AFPHULTL", "AIWPRTON", "AQTBCODX", "ATTACKOFTHEVILLAGEPEOPLE", "BETTERSTAYINDOORS", "BGKGTJH", "BMTPWHR",
+    "BRINGITON", "BTCDBCB", "CANTSEEWHEREIMGOING", "CELEBRITYSTATUS", "CHITTYCHITTYBANGBANG", "CPKTNWT", "CRAZYTOWN",
+    "DONTBRINGONTHENIGHT", "DONTTRYANDSTOPME", "EEGCYXT", "FLYINGTOSTUNT", "FOOOXFT", "FVTMNBZ", "GHOSTTOWN",
+    "HITTHEROADJACK", "ICANGOALLNIGHT", "ITSALLBULL", "IWANTTOHOVER", "JQNTDMH", "JUMPJET", "JUSTTRYANDSTOPME",
+    "LETSGOBASEJUMPING", "MANFROMATLANTIS", "MONSTERMASH", "NATURALTALENT", "NIGHTPROWLER", "NINJATOWN", "NOONECANHURTME",
+    "NOONECANSTOPUS", "NOTFORPUBLICROADS", "NUTTERSTOYS", "PINKISTHENEWCOOL", "PLEASANTLYWARM", "PPGWJHT",
+    "PROFESSIONALSKIT", "ROCKETMAN", "ROCKETMAYHEM", "SCOTTISHSUMMER", "SLOWITDOWN", "SOLONGASITSBLACK", "SPEEDITUP",
+    "STATEOFEMERGENCY", "STAYINANDWATCHTV", "STICKLIKEGLUE", "STINGLIKEABEE", "STOPPICKINGONME", "SURROUNDEDBYNUTTERS",
+    "TIMEJUSTFLIESBY", "TIMETOKICKASS", "TOODAMNHOT", "TURNDOWNTHEHEAT", "TURNUPTHEHEAT", "VPJTQWV", "WANRLTW",
+    "WHERESTHEFUNERAL", "WHOATEALLTHEPIES", "YLTEICZ"};
+uint64_t g_lastLetterMs = 0;
+
+// The key goes on a code being typed: the game's last keys (CCheat::m_CheatString, newest first) and this one begin one
+// of the codes. Only right after another letter (one letter before it only within 0.4 s: S then T is also walking back
+// and the chat), so a T long after is the chat again.
+bool TypingCheat(int vk) {
+    if (vk < 'A' || vk > 'Z' || NowMs() - g_lastLetterMs > 1500) return false;
+    const char* typed = (const char*)0x969110;
+    size_t n = strnlen(typed, 29);
+    char tail[32];
+    for (size_t k = n; k >= 1; --k) {  // the longest run of the last keys first
+        for (size_t i = 0; i < k; ++i) tail[i] = (char)toupper((unsigned char)typed[k - 1 - i]);
+        tail[k] = (char)vk;
+        for (const char* code : kCheatsWithT)
+            if (!strncmp(code, tail, k + 1)) return k >= 2 || NowMs() - g_lastLetterMs < 400;
+    }
+    return false;
+}
+
 bool OnKeyDown(int vk, bool repeat) {
     auto& cfg = Cfg();
+    bool typingCheat = !repeat && TypingCheat(vk);
+    if (!repeat && vk >= 'A' && vk <= 'Z') g_lastLetterMs = NowMs();
     if (ui::IsConnectMenuVisible()) {
         if (vk == VK_ESCAPE || vk == VK_F9) {
             if (!repeat) ui::SetConnectMenuVisible(false);
@@ -395,7 +456,7 @@ bool OnKeyDown(int vk, bool repeat) {
         return true;
     }
     bool inMenu = game::MenuActive();
-    if (vk == cfg.chatKey && !inMenu && (IsPlayerReady() || Net().Online())) {
+    if (vk == cfg.chatKey && !inMenu && (IsPlayerReady() || Net().Online()) && !typingCheat) {
         ui::TheChat().Open();
         MSG m;  // the key's own letter, queued already by TranslateMessage ("t", or "е" in a Russian layout)
         PeekMessageW(&m, nullptr, WM_CHAR, WM_CHAR, PM_REMOVE);

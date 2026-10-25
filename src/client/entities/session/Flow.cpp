@@ -52,6 +52,8 @@ uint64_t g_gameStartedAt = 0, g_snapshotTriedAt = 0;
 bool g_follower = false;            // partner: in a new game of its own next to the host, until its first save
 bool g_progressUpload = false;      // host: the next snapshot goes to the partners in the game as well
 std::vector<uint8_t> g_pendingWorld;  // partner: the host's world after its progress, loaded at a safe moment
+uint64_t g_pendingSince = 0, g_pendingToldMs = 0;  // partner: when it came, when the log last said what holds it
+uint64_t g_reloadFadeMs = 0;                       // partner: when the screen began to go black for that load
 SavedSpot g_spot;
 bool g_hasSpot = false;
 
@@ -117,6 +119,39 @@ void LetServerThroughFirewall(const std::wstring& exe) {
                                   "Without it your friend cannot connect. Allow coop-server.exe in Windows Firewall yourself."));
 }
 
+// Why Windows did not start the server, in words. 4550-4583 are its code integrity policy: on Windows 11 that is Smart
+// App Control, which runs no program without a digital signature (error 4551 in a player's report).
+std::string StartError(DWORD err) {
+    if (err == ERROR_VIRUS_INFECTED || err == ERROR_VIRUS_DELETED || err == ERROR_ACCESS_DENIED)
+        return Format(TR("Антивирус не дал запустить coop-server.exe (ошибка %lu). Добавьте папку игры в исключения антивируса.",
+                         "An antivirus kept coop-server.exe from starting (error %lu). Add the game folder to the antivirus exclusions."),
+                      err);
+    if (err >= 4550 && err <= 4583)
+        return Format(TR("Windows не дал запустить сервер (ошибка %lu). Интеллектуальное управление приложениями не пускает "
+                         "программы без цифровой подписи, а у coop-server.exe её нет. К другу можно подключиться и так: для "
+                         "этого сервер не нужен.",
+                         "Windows kept the server from starting (error %lu). Smart App Control runs no program without a "
+                         "digital signature, and coop-server.exe has none. You can still join a friend: that needs no server."),
+                      err);
+    if (err == ERROR_ACCESS_DISABLED_BY_POLICY)
+        return Format(TR("Запуск coop-server.exe запрещён правилами Windows (ошибка %lu): групповой политикой, AppLocker или "
+                         "родительским контролем.",
+                         "Windows rules forbid starting coop-server.exe (error %lu): a group policy, AppLocker or parental "
+                         "controls."),
+                      err);
+    if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND || err == ERROR_BAD_EXE_FORMAT)
+        return Format(TR("Файл coop\\coop-server.exe пропал или повреждён (ошибка %lu). Распакуйте архив мода заново.",
+                         "The file coop\\coop-server.exe is missing or damaged (error %lu). Unpack the mod again."),
+                      err);
+    wchar_t* text = nullptr;
+    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, err, 0,
+                   (wchar_t*)&text, 0, nullptr);
+    std::string why = text ? Trim(WideToUtf8(text)) : std::string();
+    if (text) LocalFree(text);
+    if (why.empty()) return Format(TR("Не удалось запустить сервер (ошибка %lu).", "Could not start the server (error %lu)."), err);
+    return Format(TR("Не удалось запустить сервер (ошибка %lu: %s).", "Could not start the server (error %lu: %s)."), err, why.c_str());
+}
+
 bool StartServerProcess(const std::wstring& worldPath, bool newGame) {
     auto& cfg = Cfg();
     std::wstring exe = cfg.coopDir + L"coop-server.exe";
@@ -151,12 +186,7 @@ bool StartServerProcess(const std::wstring& worldPath, bool newGame) {
     // Started running, not suspended to be put in the job first: a process made suspended and resumed is how malware
     // hollows one out, and antiviruses watch for it. The server starts no process of its own before the job takes it.
     if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, cfg.coopDir.c_str(), &si, &pi)) {
-        DWORD err = GetLastError();
-        bool av = err == ERROR_VIRUS_INFECTED || err == ERROR_VIRUS_DELETED || err == ERROR_ACCESS_DENIED;
-        Fail(av ? Format(TR("Антивирус не дал запустить coop-server.exe (ошибка %lu). Добавьте папку игры в исключения антивируса.",
-                            "An antivirus kept coop-server.exe from starting (error %lu). Add the game folder to the antivirus exclusions."),
-                         err)
-                : Format(TR("Не удалось запустить сервер (ошибка %lu).", "Could not start the server (error %lu)."), err));
+        Fail(StartError(GetLastError()));
         return false;
     }
     // the server dies together with the game
@@ -461,11 +491,20 @@ int WantedLevel() {
 
 // Casino tables, the barber's chair, a meal, the gym's machines, basketball and the dance raise no mission flag: the
 // world reloaded under them. The player's own control and its plain on-foot task (type 0) say it does nothing of that.
-bool SafeToReload() {
+// What keeps the host's world from loading now, or null. Stars wait (the host's world wipes the stars of a chase) unless
+// anyStars: the forbidden territories of an old world give 4 that never fade.
+const char* ReloadBlocker(bool anyStars) {
     game::CPlayerPed* me = game::FindPlayerPed(0);
-    return core::IsPlayerReady() && me && !me->InVehicle() && me->Health() > 0.0f && !game::Ref<uint8_t>(0xB5F851) &&
-           !core::IsOnMission() && !HostMissionRecent(5000) && game::GetPad(0)->DisablePlayerControls == 0 &&
-           ActivePrimaryTaskType(me) == 0 && WantedLevel() == 0;  // the host's world wipes the stars of a chase
+    if (!core::IsPlayerReady() || !me) return "no player";
+    if (me->InVehicle()) return "in a vehicle";
+    if (me->Health() <= 0.0f) return "dead";
+    if (game::Ref<uint8_t>(0xB5F851)) return "a cutscene";
+    if (core::IsOnMission()) return "a mission here";
+    if (HostMissionRecent(5000)) return "the host's mission";
+    if (game::GetPad(0)->DisablePlayerControls != 0) return "no control";
+    if (ActivePrimaryTaskType(me) != 0) return "busy";
+    if (!anyStars && WantedLevel() != 0) return "wanted";
+    return nullptr;
 }
 
 void SaveSpot() {
@@ -518,14 +557,21 @@ void Update() {
         g_error = net.FailReason();
     }
     wasOnline = online;
+    // the screen went black for a reload of the host's world that is off now (the session dropped): back from black
+    if (g_reloadFadeMs && (g_pendingWorld.empty() || g_phase != Phase::Playing) && core::IsPlayerReady()) {
+        g_reloadFadeMs = 0;
+        game::script::Cmd(0x016A).I(300).I(1).Run();  // DO_FADE in
+    }
 
     switch (g_phase) {
         case Phase::StartingServer:
             if (!ServerProcessAlive()) {
                 Fail(TR("Сервер не запустился: порт уже занят, или его остановил антивирус. Подробности в файле "
-                        "coop\\server-data\\server.log, а если он пустой, добавьте папку игры в исключения антивируса.",
-                        "The server did not start: the port is taken, or an antivirus stopped it. See coop\\server-data\\server.log, "
-                        "and if it is empty, add the game folder to the antivirus exclusions."));
+                        "coop\\server-data\\server.log (если игра стоит в Program Files, то в %LOCALAPPDATA%\\SA-COOP\\server-data), "
+                        "а если он пустой, добавьте папку игры в исключения антивируса.",
+                        "The server did not start: the port is taken, or an antivirus stopped it. See coop\\server-data\\server.log "
+                        "(%LOCALAPPDATA%\\SA-COOP\\server-data for a game in Program Files), and if it is empty, add the game "
+                        "folder to the antivirus exclusions."));
                 break;
             }
             if (NowMs() - g_phaseTime > 400) {
@@ -555,7 +601,28 @@ void Update() {
         case Phase::LoadingWorld:
             break;
         case Phase::Playing:
-            if (!g_pendingWorld.empty() && !net.IsHost() && SafeToReload()) {
+            if (!g_pendingWorld.empty() && !net.IsHost()) {
+                // The load holds the picture still for a second or so: players took it for a lag after every passed mission,
+                // and behind a fade for a black screen out of nowhere. It waits for the next mission's start point, where the
+                // screen goes dark for the mission anyway and the host's start waits for it, or ten minutes with no mission.
+                const char* why = ReloadBlocker(NowMs() - g_pendingSince > 60000);
+                if (!why && !AtMissionMarker() && NowMs() - g_pendingSince < 600000) why = "the next mission's start point";
+                if (why) {
+                    if (g_reloadFadeMs) g_reloadFadeMs = 0, game::script::Cmd(0x016A).I(300).I(1).Run();  // DO_FADE: not now
+                    if (NowMs() - g_pendingToldMs > 30000) {
+                        g_pendingToldMs = NowMs();
+                        LOGI("The host's world waits: %s", why);
+                    }
+                    break;
+                }
+                // into black first: the load holds the picture still for a second or so, which players took for a lag
+                if (!g_reloadFadeMs) {
+                    g_reloadFadeMs = NowMs();
+                    game::script::Cmd(0x016A).I(300).I(0).Run();  // DO_FADE out
+                    break;
+                }
+                if (NowMs() - g_reloadFadeMs < 350) break;
+                g_reloadFadeMs = 0;
                 std::vector<uint8_t> data = std::move(g_pendingWorld);
                 g_pendingWorld.clear();
                 SaveSpot();
@@ -563,6 +630,7 @@ void Update() {
                 ui::TheChat().AddSystem(TR("Хост продвинулся по сюжету. Загружаем его мир, вы останетесь на своём месте...",
                                            "The host moved on in the story. Loading their world, you stay where you are..."));
                 LoadHostWorld(data);
+                if (g_phase != Phase::LoadingWorld) game::script::Cmd(0x016A).I(300).I(1).Run();  // it failed: back from black
             }
             break;
         default:
@@ -639,6 +707,8 @@ void OnNewGameFromHost() {
 bool IsFollower() { return g_follower && Net().Online() && !Net().IsHost(); }
 
 bool InHostWorld() { return Net().Online() && g_phase == Phase::Playing && !g_prologueWait; }
+bool HostWorldWaiting() { return !g_pendingWorld.empty(); }
+bool HostWorldLoading() { return g_reloadFadeMs != 0 || g_phase == Phase::LoadingWorld; }
 
 bool InSharedWorld() { return Net().Online() && (Net().IsHost() || InHostWorld()); }
 
@@ -734,7 +804,25 @@ void LoadHostWorld(const std::vector<uint8_t>& data) {
     }
     EnsureDirectory(Cfg().coopDir + L"world");
     std::wstring path = PartnerWorldPath();
-    if (!WriteFileBytes(path, data.data(), data.size())) {
+    // An antivirus holding the file a moment, a folder with no write access (a game in Program Files, Windows' controlled
+    // folder access): a few tries, then the user's own folder.
+    bool written = false;
+    for (int i = 0; i < 5 && !written; ++i) {
+        written = WriteFileBytes(path, data.data(), data.size());
+        if (!written) {
+            LOGW("The world save did not go to %s (error %lu)", WideToUtf8(path).c_str(), GetLastError());
+            Sleep(100);
+        }
+    }
+    wchar_t local[MAX_PATH];
+    if (DWORD n = written ? 0 : GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH); n && n < MAX_PATH) {
+        std::wstring dir = std::wstring(local) + L"\\SA-COOP\\world\\";
+        EnsureDirectory(dir);
+        path = dir + L"partner_world.b";
+        written = WriteFileBytes(path, data.data(), data.size());
+        LOGI("The world save goes to %s instead: %s", WideToUtf8(path).c_str(), written ? "written" : "failed too");
+    }
+    if (!written) {
         Fail(TR("Не удалось записать сохранение мира на диск.", "Could not write the world save to disk."));
         return;
     }
@@ -753,9 +841,10 @@ void LoadHostWorld(const std::vector<uint8_t>& data) {
 void OnWorldReceived(const std::vector<uint8_t>& data) {
     if (Net().IsHost()) return;
     g_worldNone = false;
-    if (g_phase == Phase::Playing && core::IsPlayerReady() && !g_follower) {  // the host's progress: at a safe moment
+    if (g_phase == Phase::Playing && core::IsPlayerReady() && !g_follower) {  // the host's progress: at the next start point
         g_pendingWorld = data;
-        LOGI("The host's world after its progress came: loaded at a safe moment");
+        g_pendingSince = g_pendingToldMs = NowMs();
+        LOGI("The host's world after its progress came: kept for the next mission's start point");
         return;
     }
     LoadHostWorld(data);

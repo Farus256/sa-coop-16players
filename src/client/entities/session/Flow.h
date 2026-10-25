@@ -52,6 +52,8 @@ void OnWorldNone();        // partner: no world to load yet, the server sends it
 void OnNewGameFromHost();  // partner: the prologue is over (no save of it yet): a new game of its own, next to the host
 bool IsFollower();         // partner: in that new game until the host's first save arrives
 bool InHostWorld();
+bool HostWorldWaiting();  // partner: the host's world after its progress waits to load (at the next mission's start point)
+bool HostWorldLoading();  // partner: and loads now (the screen going dark for it, or the load itself)
 // online and in the world both games share: the host always, a partner once it plays the host's world (before that
 // its pickups, purchases, cheats and the host's ones belonged to two different worlds)
 bool InSharedWorld();        // partner: playing the host's world (not its own game while it waits, not during a prologue)

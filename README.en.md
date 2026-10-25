@@ -72,7 +72,10 @@ to the host. The mission's limits on the wanted level apply to both players, and
 opens or changes change for the partner too, as do the parts of the map a mission adds, such as the weed field
 in "Are You Going To San Fierro?". The partner can also take the photos a mission asks for. A partner
 killed during a mission comes back next to the host. If the host gets on a bike or into a vehicle with no seat
-left, the same kind of vehicle appears next to the partner.
+left, the same kind of vehicle appears next to the partner. The partner watches a mission's in-engine scenes
+through the same camera as the host. In the lowrider contest and the beach dance the partner plays next to the
+host, and their points go into the shared score. Either player can carry the crates in the house robbery with Ryder
+and load them into the van.
 
 | The host stands in the marker | The partner sees that the host is waiting |
 |---|---|
@@ -128,8 +131,9 @@ off). CJ getting into a car by himself calls nobody. What the story asks of CJ s
 
 ### Your own progress
 
-Food and the gym, weapon and driving skills, clothes, haircuts, tattoos, money and side job rewards are separate
-for each player. What a player does at a diner, the gym, a barber's or a tattoo parlour, the other player sees as
+Food and the gym, weapon skills, clothes, haircuts, tattoos and money are separate for each player. Driving,
+motorbike, cycling and flying skills are shared: both players have the better of the two. The stats in the menu are
+shared too. A side job or challenge completed by one player counts for both, reward included. What a player does at a diner, the gym, a barber's or a tattoo parlour, the other player sees as
 well, along with a tray of food, a cigarette, a phone at the ear, a parachute jump, a fighting style learned at the
 gym, crouching with its rolls, reloading and walking in through shop doors. If a player changes their character model, for example with a skin selector, the other player sees the new
 model too. The friend comes into the host's world as their own CJ, in the clothes and with the tattoos their CJ
@@ -240,10 +244,13 @@ Side jobs (taxi, paramedic, firefighter, vigilante, pimp), races, schools, the s
 quarry are played by each player in their own game. A side job or a race can be played together: within 20 seconds
 of its start press Y, and the other players get an invitation (Y: yes, N: no; one can join). Whoever accepts sees its markers,
 checkpoints, timers and hints, can ride along and help, for example put out burning cars or shoot the criminals, and
-gets the same money at its end. The job's levels stay with the player who started it. There is text chat and voice chat, and the farther away the
+gets the same money at its end. The job's levels stay with the player who started it, and the reward for
+completing the job goes to both. There is text chat and voice chat, and the farther away the
 partner is, the quieter they sound. A waypoint one player sets on the map shows up on the other player's radar,
 and a house one player buys appears for both. Above the partner's head you see their health, armour, weapon and
-wanted stars. Only the host starts turf wars, but both players' kills of rival gang members provoke them. Cheats
+wanted stars. Turf wars near the host are the host's, and both players' kills of rival gang members provoke
+them. A partner more than 100 m from the host can start a war of their own, and the host sees in the chat which
+district it is for and how it ended. Cheats
 for the weather, traffic, pedestrians and game speed work for both players, while weapon, money and health cheats
 only work for the player who typed them. Theme cheats such as the beach party change the pedestrians for both,
 but only the player who typed the code gets the outfit and the katana.
@@ -335,9 +342,9 @@ A unique beginning of a nickname is enough.
 - Only the host can start story missions, Cesar's races and turf wars. When a mission has CJ carry something, like
   the crates in the house robbery with Ryder, the host does it.
 - You see the other player's train but cannot get into it: it is driven by the player whose game made it.
-- The partner gets story progress (new areas, gyms, mission markers) by loading the host's world after every
-  mission the host passes. Loading takes a few seconds, and the partner keeps their position, weapons and
-  progress.
+- The partner gets story progress (new areas, gyms) by loading the host's world. This happens in the next
+  mission's marker, or after 10 minutes without missions, and takes a couple of seconds. The partner keeps their
+  position, weapons and progress.
 - The host keeps the partner's profile under the partner's nickname. With a different nickname, money and skills
   start over.
 - Whatever gets knocked down or broken on the streets stays that way for half an hour, then the map puts
@@ -354,7 +361,7 @@ A unique beginning of a nickname is enough.
 
 Report bugs, crashes and ideas in [Issues](../../issues/new/choose). A short form opens there: what happened, how
 to make it happen again, the mod version and which game you have. The form is in Russian, but you can answer in
-English. A [Telegram group](https://t.me/+GNKZb83LqBQyMGEy) is also available if you encounter difficulties sending to GitHub.
+English. A [Telegram group](https://t.me/sacoop_forum) is also available if you encounter difficulties sending to GitHub.
 
 With a bug report, attach `coop\coop.log` from the game folder of the player who had the problem. If the game
 crashed, also attach `coop\crash.log`, and if you cannot connect, attach the host's `coop\server-data\server.log`.

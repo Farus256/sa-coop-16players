@@ -239,7 +239,7 @@ void Scan() {
     for (auto& [ped, who] : holders) {
         void* t = HoldTask((CPed*)ped);
         auto* e = t ? Field<CEntity*>(t, 0x08) : nullptr;  // m_pEntityToHold
-        if (!e || !e->IsObject()) continue;
+        if (!e || !e->IsObject() || MissionObjectCopy(e)) continue;  // the host's crate in our hands: Objects carries it
         Prop p;
         p.by = who.first;
         p.holder = who.second;

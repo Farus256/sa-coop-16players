@@ -108,10 +108,11 @@ enum MsgId : uint8_t {
     G_PED_OWNER = 93,         // reliable: u16 netId, u8 to: the owner gives its ped away (the mirror becomes its own)
     G_PED_STATUS = 94,        // reliable: death, weapon, task hints
     G_RESYNC = 95,            // reliable: "my game (re)started", the others announce their vehicles and peds again
-    G_OBJ_CREATE = 100,       // reliable: an object of the host's mission
+    G_OBJ_CREATE = 100,       // reliable: an object of the host's mission (its last u8: 1 liftable, 2 in the host's hands)
     G_OBJ_REMOVE = 101,       // reliable: it is gone (or broke)
-    G_OBJ_SYNC = 102,         // unreliable: it moved
-    G_PICKUP_EVENT = 103,     // reliable: a pickup was collected
+    G_OBJ_SYNC = 102,         // unreliable: it moved (and the same flags byte, i8 its interior)
+    G_PICKUP_EVENT = 103,     // reliable: a pickup was collected, a tag painted; host: the tags and collectibles as they are
+                              // (to a restarted partner), its mission's SET_TAG_STATUS_IN_AREA
     G_PICKUP_CREATE = 104,    // reliable: a pickup appeared (loot, the host's mission)
     G_OBJ_DAMAGE = 105,       // reliable: the partner hit a mirror object, its owner applies it
     G_FIRE = 106,             // reliable: a fire started / went out
@@ -178,7 +179,8 @@ enum MsgId : uint8_t {
     G_CHEAT_RULE = 161,       // reliable, from the host: u8 1 when cheat codes do not work in its game
     // the original mod's 0.3.0 (its own numbers 147-156 were this fork's already)
     G_MISSION_POLICY = 162,   // reliable, host -> partner: the mission's police rules (u8 max wanted, u8 back-off bits,
-                              // f32 wanted multiplier)
+                              // f32 wanted multiplier), u8 city level (STAT_CITY_UNLOCKED), u8 1: its stars were cleared,
+                              // f32 density of people, f32 density of cars
     G_VEH_SCRIPT = 163,       // reliable, host -> the driver's game: the host's mission moved, turned or froze a car that
                               // the other player drives (u16 car, u8 its owner, u16 command, its three parameters)
     G_INTERIOR_POP = 164,     // reliable, host -> partner: i8 area, vec3 at: its game made that interior's people
@@ -196,6 +198,41 @@ enum MsgId : uint8_t {
                               // a change and every 3 s while it is)
     G_SIDE = 171,             // reliable: u8 op (1 offer, 2 accept, 3 decline, 4 end, 5 leave), u8 to (a player, 255 all),
                               // str name (the side activity's mission script), i32 money (end: what it paid)
+    // the original mod's 0.3.1 (its numbers 157-172 were this fork's already)
+    G_SCENE_CAM = 172,        // host -> partner, a scene of its story mission on the engine: u8 op 1 sample (state
+                              // channel): u8 scene, u8 shot, u32 host ms, vec3 camera, vec3 front, f32 fov, i8 area, u8
+                              // flags (1 wide, 2 control off); u8 op 2 end (reliable): u8 scene
+    G_TURF_WAR = 173,         // reliable: a gang war the partner's game fights: u8 op (1 start, 2 zone, 3 end, 4 stop), u16
+                              // zone info, then start: u16 navigation zone, u8 gang; zone: 16 zone bytes; end: u8 result
+    G_STAT_SYNC = 174,        // reliable: u8 full (0 changes, 1 all records: answer, 2 the answer), u8 n, n x {u16 stat,
+                              // u8 rule (1 add, 2 max, 3 min non-zero, 4 set: host -> partner), u32 value}
+    G_SIDE_DONE = 175,        // reliable: u8 n, n x {u16 global, i32 value}: side jobs and challenges done in the sender's
+                              // game (the receiver sets the flag and gives its reward)
+    G_BEAT = 176,             // reliable, host -> partner: a music minigame of its story mission: u8 op 1 lowrider (i16 track,
+                              // u8 kind, vec3 the host's car, f32 heading), 2 play, 3 stop, 5 dance (u8 streamed script,
+                              // vec3 spot, f32 heading, i16 track, f32[30] its five fixed cameras: x, y, z, then aim x, y, z)
+    G_BEAT_SCORE = 177,       // reliable, partner -> host: u8 op (1 joined, 2 points, 3 done), u8 kind, i32 beat, i32 points
+                              // (the lowrider: this beat's; the dance: its running total)
+    G_MISSION_IFP = 178,      // reliable, host -> partner: u8 1 the story mission loads an animation file (REQUEST_ANIMATION),
+                              // 0 lets it go; str its name: the partner keeps it in memory too, for its scenes' gestures
+    G_MISSION_FACE = 179,     // reliable, host -> partner: a scene's face talk: u8 kind (2 ped, 3 player), u16 id, i32 ms
+                              // (0: it stops)
+    G_CAR_DOOR = 180,         // reliable, host -> partner: the story mission's door command on a car: u16 car, u16 opcode
+                              // (OPEN_CAR_DOOR, CLOSE_ALL_CAR_DOORS, POP_CAR_DOOR, FIX_CAR_DOOR, OPEN_CAR_DOOR_A_BIT),
+                              // i32 door, i32 its other parameter (the bits of a float for OPEN_CAR_DOOR_A_BIT)
+    G_NOISE = 181,            // reliable, partner -> host: its own noise meter of "Home Invasion" is full
+    G_MISSION_HINT = 182,     // reliable, host -> partner: u8 1 show (0 take away) a help of the host's mission meant for the
+                              // partner's own doing, str its GXT key (the crate's load at the van)
+    G_MISSION_LOOK_AT = 183,  // reliable, host -> partner: a scene's head turn (TASK_LOOK_AT_CHAR): u8 kind (2 ped, 3 player),
+                              // u16 id of who looks, the same of whom, i32 ms
+    G_PED_NO_COLLIDE = 184,   // reliable, host -> partner: SET_CHAR_USES_COLLISION_CLOSEST_OBJECT_OF_TYPE of the story mission
+                              // on a shared person: u8 kind, u16 id, vec3 at, f32 radius, i32 model, u8 state
+    G_PED_ATTACH = 185,       // reliable, host -> partner: the story mission puts a shared person on a car (ATTACH_CHAR_TO_CAR):
+                              // u8 1 on (0 off), u8 kind, u16 id, u16 car, vec3 offset, i32 heading, f32 range, i32 weapon
+    G_MISSION_LOOK = 186,     // reliable, host -> partner: what the story mission put on its player, worn over the
+                              // partner's own look: u8 n, n x (u8 key index 0..27 of CPedClothesDesc, u32 key); 0: off
+    G_OBJ_HOLD = 187,         // reliable: the partner holds the copy of a host's mission object: u8 op (1 hold, 2 release,
+                              // 3 enter pressed, 4 deny: host -> partner), u16 object, release: vec3 pos, quat rot
 
     G_VOICE = 200,            // unreliable: voice frame
     G_LAST = 255,

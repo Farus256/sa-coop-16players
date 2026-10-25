@@ -154,7 +154,7 @@ VehicleState VehicleState::Capture(game::CVehicle* v) {
     game::CPlayerPed* me = game::FindPlayerPed(0);
     bool horn = me && v->Driver() == me ? game::CallMethod<0x53FEE0, bool>(game::GetPad(0)) : game::Field<uint32_t>(v, 0x514) > 0;
     s.flags = (v->EngineOn() ? F_ENGINE : 0) | (v->LightsOn() ? F_LIGHTS : 0) | (v->SirenOn() ? F_SIREN : 0) |
-              (horn ? F_HORN : 0) | (v->Status() == 5 ? F_WRECKED : 0);
+              (horn ? F_HORN : 0) | (v->Status() == 5 ? F_WRECKED : 0) | (v->VehicleFlagsLo() & 0x20 ? F_HANDBRAKE : 0);
     int type = v->VehicleSubClass();
     if (type <= game::VEHICLE_TYPE_PLANE || type == game::VEHICLE_TYPE_TRAILER) {  // CAutomobile and its subclasses
         s.extras |= X_MISC;

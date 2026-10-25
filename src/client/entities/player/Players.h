@@ -109,6 +109,7 @@ private:
     void SendVehicleState(game::CVehicle* v);
     void DetectCarTasks();
     void FollowHost();
+    void HoldForPassengerSeat();
     void HandleOnFoot(uint8_t from, Reader& r);
     void HandleDriver(uint8_t from, Reader& r);
     void HandlePassenger(uint8_t from, Reader& r);
@@ -140,11 +141,13 @@ private:
     game::CVehicle* m_enterReported = nullptr;
     bool m_exitReported = false;
     uint64_t m_followAt = 0;
-    game::CVehicle* m_bikeFor = nullptr;  // the host's vehicle (no seat left in it) the partner got one for
+    int m_bikeFor = -1;  // the host's vehicle (no seat left in it) the partner got one for, by handle: a later car in its slot is another
     int m_lastCar = -1;
     bool m_downed = false, m_reviving = false;
     uint8_t m_downSeconds = 0;
     int8_t m_knockOffSaved = -1;  // our player's own knock-off setting while it rides behind on the other player's bike
+    uint64_t m_enterHeldSince = 0;  // the enter button (triangle) held on foot since
+    bool m_enterHeldUsed = false;
     bool m_deathSent = false;     // our player's death animation went out (G_PLAYER_DEATH)
 };
 

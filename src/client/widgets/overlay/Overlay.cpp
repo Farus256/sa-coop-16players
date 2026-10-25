@@ -50,7 +50,7 @@ void RenderOverlay() {
         st = flow::StatusText();
     else if (!frontend && (st = CutsceneSkipText(hint)).empty() && (st = ReviveText(hint)).empty() &&
              (st = SideCallText(hint)).empty())
-        st = MissionWaitText();
+        st = MissionWaitText(hint);
     if (!core::ConnectMenuVisible() && !st.empty()) {
         float w = std::max(g.TextWidth(FONT_MENU, st), hint.empty() ? 0.0f : g.TextWidth(FONT_SMALL, hint)) + 48 * s;
         float h = g.LineHeight(FONT_MENU) + 24 * s + (hint.empty() ? 0.0f : g.LineHeight(FONT_SMALL) + 6 * s);

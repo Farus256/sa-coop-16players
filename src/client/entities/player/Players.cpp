@@ -280,10 +280,19 @@ bool __cdecl PassengerDriveBy() {
     return true;
 }
 
+int WeaponModel(int weaponType);
+
 using GangDriveByFn = bool(__fastcall*)(void*, void*, CPed*);
 GangDriveByFn g_origGangDriveBy = nullptr;
 bool __fastcall HookGangDriveByProcess(void* task, void* edx, CPed* ped) {
     auto ours = g_ourDriveBy.find(ped);
+    // The other player's copy leans out with its owner's gun: a pistol's model was not in memory here (a copy's guns come
+    // without a blocking load), the task's start added none, and it fired from its fingers (issue #65).
+    if (Players::Instance().FindByPed(ped) && !Field<void*>(ped, 0x4F4))  // CPed::m_pWeaponObject
+        if (int model = WeaponModel(ped->ActiveWeapon().type); model > 0) {
+            if (IsModelLoaded(model)) CallMethod<0x5E5ED0>(ped, model);  // CPed::AddWeaponModel
+            else RequestModel(model, 0);
+        }
     // let go: the task's own way out, command 7 (m_nNextCommand; a player's pad sets only 1 and 2 below 4). The rest of
     // the lean-out animation brings the passenger back in, and the task finishes when it is over. Finishing it at once
     // (m_bIsFinished) left the passenger leaning out of the window with the gun until two clicks.
@@ -839,7 +848,11 @@ bool ModelReady(int model) {
 // TASK_SIMPLE_UNINTERRUPTABLE with its pad back on, and the copy ran off by that stick and the door's fixed camera
 bool TaskWalks(CPed* ped) {
     int t = ActivePrimaryTaskType(ped);
-    return (t >= 900 && t < 940) || (ped == FindPlayerPed(0) && Ref<int32_t>(0x96A7CC) != 0);
+    // a step of a script's sequence (a scene's walk to the van) lies under the sequence: its simplest active task
+    void* intel = ped ? ped->Intelligence() : nullptr;
+    void* leaf = intel ? CallMethod<0x6819D0, void*>((uint8_t*)intel + 4) : nullptr;  // CTaskManager::GetSimplestActiveTask
+    int l = leaf ? CallVirtual<4, int>(leaf) : -1;                                    // CTask::GetTaskType
+    return (t >= 900 && t < 940) || (l >= 900 && l < 940) || (ped == FindPlayerPed(0) && Ref<int32_t>(0x96A7CC) != 0);
 }
 
 int ActivePrimaryTaskType(CPed* ped, void** taskOut) {
@@ -1059,6 +1072,7 @@ void Players::OnGameStarted() {
                 LOGI("The car left next to the partner (model %d) is back", s.carModel);
             }
         }
+        Cmd(0x016A).I(500).I(1).Run();  // DO_FADE in: the reload went into black (Flow)
         LOGI("Back at the spot before the reload of the host's world");
         return;
     }
@@ -1444,9 +1458,10 @@ void Players::ApplyState(RemotePlayer& rp) {
         rp.exitTaskMs = NowMs();
         LOGI("Player %d fell off the bike in its game: ours gets off too", rp.id);
     }
-    // on foot but still sitting in a vehicle here: the exit animation gets a few seconds, then warp out
+    // on foot but still sitting in a vehicle here: the exit animation gets a few seconds, then warp out. Not right after
+    // its enter task either: the copy sat down before its owner's states said so and was warped out again.
     if (ped->InVehicle()) {
-        if (NowMs() - rp.exitTaskMs > kEnterGraceMs) {
+        if (NowMs() - rp.exitTaskMs > kEnterGraceMs && NowMs() - rp.enterTaskMs > kEnterGraceMs) {
             Cmd(0x0362).I(rp.pedHandle).F(st.pos.x).F(st.pos.y).F(st.pos.z - 1.0f).Run();  // WARP_CHAR_FROM_CAR_TO_COORD (feet)
             rp.exitTaskMs = NowMs();
         }
@@ -1593,6 +1608,9 @@ void Players::ApplyVehicleSeat(RemotePlayer& rp) {
     int seat = PassengerSeatOf(nv->veh, ped);
     bool seated = ped->InVehicle() && ped->Vehicle() == nv->veh && seat == rp.seat;
     if (seated) return;
+    // getting out: its owner's states say "in the car" until it stands outside, and the copy, out first, was put back at
+    // the wheel, then pulled out again
+    if (NowMs() - rp.exitTaskMs < kEnterGraceMs) return;
     // give the enter animation time while it goes on; otherwise put the player in place directly. A copy whose
     // animation stands still (it never got to open the door: its owner, seated already, drives off, the door is
     // blocked here) used to stand frozen by the car until the grace was over and then appeared inside.
@@ -1650,7 +1668,7 @@ void Players::TryEnterAsPassenger() {
         auto* v = (CVehicle*)(pool->objects + (size_t)i * kVehiclePoolElemSize);
         if ((v->GetPosition() - mp).Length() > 12.0f || v->Status() == 5 /* wrecked */ || v->IsTrain()) continue;  // a train's copy is locked (Trains)
         for (int s = 0; s < v->MaxPassengers() && s < 8; ++s) {
-            if (v->Passengers()[s]) continue;
+            if (v->Passengers()[s] || Peds::Instance().SeatClaimed(v, s)) continue;  // a ped on its way to it has it
             int door = Call<0x64F190, int>(v, s);  // CCarEnterExit::ComputeTargetDoorToEnterAsPassenger
             if (door < 0) continue;
             CVector at;
@@ -1667,10 +1685,34 @@ void Players::TryEnterAsPassenger() {
     Cmd(0x05CA).I(GetPedRef(me)).I(GetVehicleRef(best)).I(10000).I(bestSeat).Run();  // TASK_ENTER_CAR_AS_PASSENGER
 }
 
+// A gamepad has no G key: the enter button held half a second takes a passenger seat (a press alone still goes for the
+// wheel, as in the game, and that walk to the driver's door gives way).
+void Players::HoldForPassengerSeat() {
+    CPlayerPed* me = FindPlayerPed(0);
+    const CPad* pad = GetPad(0);
+    if (!pad->NewState.ButtonTriangle || me->InVehicle() || pad->DisablePlayerControls) {
+        m_enterHeldSince = 0, m_enterHeldUsed = false;
+        return;
+    }
+    uint64_t now = NowMs();
+    if (!m_enterHeldSince) m_enterHeldSince = now;
+    if (m_enterHeldUsed || now - m_enterHeldSince < 500) return;
+    m_enterHeldUsed = true;
+    if (ActivePrimaryTaskType(me) == TASK_ENTER_CAR_AS_DRIVER) Cmd(0x0792).I(GetPedRef(me)).Run();  // CLEAR_CHAR_TASKS_IMMEDIATELY
+    TryEnterAsPassenger();
+}
+
 void Players::DetectCarTasks() {
     CPlayerPed* me = FindPlayerPed(0);
+    // the enter or leave task anywhere in what it does: a script's sequence holds it under the sequence (the walk to the
+    // van and in at the start of "Home Invasion"), and the other game's copy got in without the door's animation
+    void* intel = me->Intelligence();
+    auto find = [intel](int t) { return intel ? CallMethod<0x681740, void*>((uint8_t*)intel + 4, t) : nullptr; };  // FindActiveTaskByType
     void* task = nullptr;
-    int type = ActivePrimaryTaskType(me, &task);
+    int type = -1;
+    for (int t : {TASK_ENTER_CAR_AS_DRIVER, TASK_ENTER_CAR_AS_PASSENGER, TASK_ENTER_CAR_AS_PASSENGER_TIMED})
+        if (!task && (task = find(t))) type = t;
+    if (!task && find(TASK_LEAVE_CAR)) type = TASK_LEAVE_CAR;
     bool passenger = type == TASK_ENTER_CAR_AS_PASSENGER || type == TASK_ENTER_CAR_AS_PASSENGER_TIMED;
     if ((type == TASK_ENTER_CAR_AS_DRIVER || passenger) && task) {
         auto* target = Field<CVehicle*>(task, 0x0C);  // CTaskComplexEnterCar::m_Car, ...AsPassengerTimed::m_TargetCar
@@ -1815,7 +1857,12 @@ void Players::KeepApart(RemotePlayer& rp) {
         else other->Flags() |= 0x80u;
         LOGI("Remote player %d %s", rp.id, !hide ? "shown again" : rp.goneInDoor ? "gone in through the door" : "hidden on a shared spot");
     }
-    if (!inside) return;
+    // In a shop or a minigame (CTheScripts::bMiniGameInProgress) the script walks our player onto its spot: the other one
+    // standing near it (on the marker at the same time) kept ours from it, and the shop waited, both stuck, until the
+    // first one left its menu. They pass through each other there.
+    float apart = Ref<uint8_t>(0xA444A8) ? 1.5f : 0.4f;
+    bool touching = me && !me->InVehicle() && !other->InVehicle() && d.x * d.x + d.y * d.y < apart * apart && std::fabs(d.z) < 1.5f;
+    if (!touching) return;
     Field<CEntity*>(me, 0x128) = other;
     Field<CEntity*>(other, 0x128) = me;
 }
@@ -1934,6 +1981,7 @@ void Players::OnPostProcess() {
     }
     DetectCarTasks();
     KeepDriversGoing();
+    HoldForPassengerSeat();
     FollowHost();
     if (me->InVehicle() && me->Vehicle() && me->Vehicle()->Driver() == me) m_lastCar = GetVehicleRef(me->Vehicle());
     if (me->InVehicle() && me->Vehicle() && !me->Vehicle()->IsTrain()) SendVehicleState(me->Vehicle());
@@ -1947,7 +1995,7 @@ void Players::FollowHost() {
     RemotePlayer* host = Get(Net().HostId());
     CPlayerPed* me = FindPlayerPed(0);
     if (Net().IsHost() || Ref<uint8_t>(0xB5F851) || !host || !host->ped || !host->hasState || me->InVehicle() ||
-        NowMs() - m_followAt < 1000)  // CCutsceneMgr::ms_running: the scene holds the partner meanwhile
+        NowMs() - m_followAt < 1000 || SceneWatched())  // CCutsceneMgr::ms_running: the scene holds the partner meanwhile
         return;
     CPed* hp = host->ped;
     CVector hpos = hp->GetPosition(), mpos = me->GetPosition();
@@ -1965,39 +2013,65 @@ void Players::FollowHost() {
         return;
     }
     // No seat left for us in the host's vehicle: a bike, a forklift, Ryder's Picador with Ryder in it, Sweet's Greenwood
-    // full of the gang, Smoke's bike with the host behind him. The partner gets one of its own to follow.
-    CVehicle* bike = hp->InVehicle() ? hp->Vehicle() : nullptr;
-    int model = bike ? bike->ModelIndex() : 0, type = bike ? bike->VehicleSubClass() : -1;
-    bool land = type == VEHICLE_TYPE_AUTOMOBILE || type == VEHICLE_TYPE_MTRUCK || type == VEHICLE_TYPE_QUAD || (bike && bike->IsBike());
-    bool full = bike && bike->Driver();
-    for (int i = 0; bike && i < bike->MaxPassengers() && i < 8; ++i) full = full && bike->Passengers()[i];
-    if (!bike || bike == m_bikeFor || !land || !full) return;
-    if ((!flow::IsFollower() && !HostMissionRecent(20000)) || (hpos - mpos).Length() > 60.0f) return;
-    m_bikeFor = bike;
-    m_followAt = NowMs();
-    if (!IsModelLoaded(model)) {
-        RequestModel(model);
-        LoadAllRequestedModels(false);
-    }
-    float h = me->CurrentRotation();
-    CVector p = mpos + CVector{std::cos(h) * 1.3f, std::sin(h) * 1.3f, -0.5f};  // at the partner's right hand
-    int car = -1;
+    // full of the gang, Smoke's bike with the host behind him. The partner gets one of its own to follow. A seat that a
+    // copy of the host's people walks to is taken too: ours took Ryder's.
+    CVehicle* hv = hp->InVehicle() ? hp->Vehicle() : nullptr;
+    int model = hv ? hv->ModelIndex() : 0, type = hv ? hv->VehicleSubClass() : -1;
+    bool land = type == VEHICLE_TYPE_AUTOMOBILE || type == VEHICLE_TYPE_MTRUCK || type == VEHICLE_TYPE_QUAD || (hv && hv->IsBike());
+    bool full = hv && hv->Driver();
+    for (int i = 0; hv && i < hv->MaxPassengers() && i < 8; ++i) full = full && (hv->Passengers()[i] || Peds::Instance().SeatClaimed(hv, i));
+    if (!hv || GetVehicleRef(hv) == m_bikeFor || !land || !full) return;
+    // within reach of the host: a partner the mission left farther comes by its moves (CS_FOLLOW) or /tp first
+    if ((!flow::IsFollower() && !HostMissionRecent(20000)) || (hpos - mpos).Length() > 150.0f || me->AreaCode() != 0) return;
+    m_followAt = NowMs();  // a try every second until the model is in and there is room
+    if (!IsModelLoaded(model)) return RequestModel(model);  // in the background: a blocking load stalled the game
     if (!HasRoom(VehiclePool(), kKeepVehicles, "vehicle")) return;
+    // A spot with room and ground: right of us, left, behind, ahead, then the four between. At the right hand alone it came
+    // inside a wall or another car.
+    float h = me->CurrentRotation();
+    CVector p;
+    bool found = false;
+    for (float turn : {-1.5708f, 1.5708f, 3.1416f, 0.0f, -0.7854f, 0.7854f, -2.3562f, 2.3562f}) {
+        p = mpos + CVector{std::cos(h + turn) * 3.5f, std::sin(h + turn) * 3.5f, 0.0f};
+        bool ground = false;
+        float z = Call<0x5696C0, float>(p.x, p.y, mpos.z + 2.0f, &ground, (CEntity**)nullptr);  // CWorld::FindGroundZFor3DCoord
+        if (!ground || std::fabs(z - (mpos.z - 1.0f)) > 2.0f) continue;
+        p.z = z + 0.5f;
+        // nothing between us and the spot (a wall, a post: CWorld::GetIsLineOfSightClear), and no car or person on it
+        // (IS_AREA_OCCUPIED, 1 m around; the ground is a building, so buildings not). It counts whatever its bounding
+        // sphere reaches into the box: ours (1.25 m) reached the 2.5 m one from 3.5 m away at every spot, and no bike came.
+        CVector chest = mpos, at = p + CVector{0, 0, 0.7f};
+        if (!Call<0x56A490, bool>(&chest, &at, true, true, false, true, false, true, false) ||
+            Cmd(0x0339).F(p.x - 1.0f).F(p.y - 1.0f).F(p.z - 0.3f).F(p.x + 1.0f).F(p.y + 1.0f).F(p.z + 2.0f).I(0).I(1).I(1).I(0).I(0).Run())
+            continue;
+        found = true;
+        break;
+    }
+    static int noRoomFor = -1;
+    if (!found) {
+        if (noRoomFor != GetVehicleRef(hv)) noRoomFor = GetVehicleRef(hv), LOGI("No room next to us for a vehicle like the host's (model %d) yet", model);
+        return;
+    }
+    int car = -1;
     Cmd(0x00A5).I(model).F(p.x).F(p.y).F(p.z).Out(&car).Run();  // CREATE_CAR
     if (car < 0) return;
+    m_bikeFor = GetVehicleRef(hv);  // once it stands: a failed try (no room, the model loading) tries again
     Cmd(0x0175).I(car).F(h * 57.29578f).Run();  // SET_CAR_HEADING
     Cmd(0x01C3).I(car).Run();                   // MARK_CAR_AS_NO_LONGER_NEEDED: an ordinary vehicle from now on
-    ui::TheChat().AddSystem(bike->IsBike() ? TR("Рядом с вами мотоцикл. Садитесь и езжайте за хостом.",
-                                                "There is a bike next to you. Get on and follow the host.")
-                                           : TR("Рядом с вами машина. Садитесь и езжайте за хостом.",
-                                                "There is a vehicle next to you. Get in and follow the host."));
+    ui::TheChat().AddSystem(type == VEHICLE_TYPE_BMX ? TR("Рядом с вами велосипед. Садитесь и езжайте за хостом.",
+                                                          "There is a bicycle next to you. Get on and follow the host.")
+                            : hv->IsBike()           ? TR("Рядом с вами мотоцикл. Садитесь и езжайте за хостом.",
+                                                          "There is a motorbike next to you. Get on and follow the host.")
+                                                     : TR("Рядом с вами машина. Садитесь и езжайте за хостом.",
+                                                          "There is a vehicle next to you. Get in and follow the host."));
     LOGI("The host is in a vehicle with no seat for us (model %d): one for the partner too", model);
 }
 
 // the point over rp's head the name tag hangs from (back buffer coordinates) and its fade with distance
 bool Players::TagAnchor(RemotePlayer& rp, float& sx, float& sy, float& alpha) {
     CPlayerPed* me = FindPlayerPed(0);
-    if (!rp.ped || !me || rp.ped->AreaCode() != me->AreaCode() || rp.hiddenOnSpot) return false;
+    // and none in a scene with the bars up (a cutscene's or a mission's on the engine), as the game shows no HUD there
+    if (!rp.ped || !me || rp.ped->AreaCode() != me->AreaCode() || rp.hiddenOnSpot || cam::WideScreenOn()) return false;
     CVector head = rp.ped->GetPosition() + CVector{0, 0, 0.95f};
     float dist = (head - cam::Source()).Length();
     if (dist > 70.0f) return false;
@@ -2132,11 +2206,19 @@ bool Players::OnCommand(const std::string& cmd, const std::vector<std::string>& 
     }
     CPlayerPed* me = FindPlayerPed(0);
     // into a building only through its door: one teleported in skipped the game's entry (the interior's people, its
-    // light, the door), and the two games saw that interior differently
+    // light, the door), and the two games saw that interior differently. The host's story mission is the exception: it
+    // takes the host to places with no door at all (a plane's hold in "Stowaway"), and the partner belongs there.
     if (cmd == "tp" && targets[0]->state.area != 0) {
-        ui::TheChat().AddError(TR("Нельзя переместиться к игроку, пока он в здании.",
-                                  "You cannot go over to a player while they are inside a building."));
-        return true;
+        if (targets[0]->id != Net().HostId() || !HostMissionRecent(0)) {
+            ui::TheChat().AddError(TR("Нельзя переместиться к игроку, пока он в здании.",
+                                      "You cannot go over to a player while they are inside a building."));
+            return true;
+        }
+        if (me->InVehicle()) {
+            ui::TheChat().AddError(TR("Выйдите из машины, чтобы переместиться к игроку в здание.",
+                                      "Get out of the vehicle to go over to a player inside a building."));
+            return true;
+        }
     }
     if (cmd == "tphere" && me->AreaCode() != 0) {
         ui::TheChat().AddError(TR("Нельзя позвать игроков к себе, пока вы в здании.",

@@ -42,11 +42,9 @@ AttachFn g_origAttachPed = nullptr, g_origAttachObject = nullptr, g_origAttachPh
 
 void* Engine() { return (void*)kAudioEngine; }
 
-// a mission script of the host's game, with a partner to hear it
-bool Sharing() {
-    void* script = CurrentScript();
-    return HostReplicating() && script && Field<uint8_t>(script, 0xDC);  // CRunningScript::m_bIsMission
-}
+// a script of the host's story mission (or a thread it started: AUDIOL says the lines of "Cesar Vialpando"'s scenes),
+// with a partner to hear it
+bool Sharing() { return HostReplicating() && MissionThread(CurrentScript()); }
 
 Writer Begin(uint8_t op, uint8_t slot) {
     Writer w(proto::G_MISSION_AUDIO);

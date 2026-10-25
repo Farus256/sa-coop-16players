@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -48,6 +49,35 @@ static void WriteDefaultConfig(const std::wstring& path) {
     WriteFileBytes(path, text, strlen(text));
 }
 
+static bool Writable(const std::wstring& dir) {
+    EnsureDirectory(dir);
+    std::wstring probe = dir + L"write-test.tmp";
+    HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+
+// The server runs as its invoker with no file virtualization (its manifest, since 0.3.0): in a game under Program Files
+// it wrote nothing, and the partners lost their progress every session. Then its data goes to the user's own folder,
+// and what 0.2.x wrote to the VirtualStore (UAC's redirection of those writes) comes along once.
+static std::wstring UserDataDir(const std::wstring& wanted) {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    if (!n || n >= MAX_PATH) return L"";
+    std::wstring dir = std::wstring(buf) + L"\\SA-COOP\\server-data\\";
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec) && wanted.size() > 3 && wanted[1] == L':') {
+        std::wstring virtualStore = std::wstring(buf) + L"\\VirtualStore\\" + wanted.substr(3);
+        if (std::filesystem::exists(virtualStore, ec)) {
+            std::filesystem::create_directories(dir, ec);
+            std::filesystem::copy(virtualStore, dir, std::filesystem::copy_options::recursive, ec);
+        }
+    }
+    return Writable(dir) ? dir : L"";
+}
+
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
@@ -64,8 +94,11 @@ int wmain(int argc, wchar_t** argv) {
             if (!dataDir.empty() && dataDir.back() != L'\\') dataDir += L'\\';
         }
     }
-    EnsureDirectory(dataDir);
+    std::wstring wantedDir = dataDir;
+    if (!Writable(dataDir))
+        if (std::wstring own = UserDataDir(dataDir); !own.empty()) dataDir = own;
     log::Open(dataDir + L"server.log", true);
+    if (dataDir != wantedDir) LOGW("Нет записи в %s: данные сервера в %s", WideToUtf8(wantedDir).c_str(), WideToUtf8(dataDir).c_str());
 
     if (!FileExists(configPath)) WriteDefaultConfig(configPath);
     Ini ini;

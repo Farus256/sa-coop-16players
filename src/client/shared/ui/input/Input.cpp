@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -18,39 +19,6 @@ Input& In() {
 
 static WNDPROC g_origProc = nullptr;
 
-// The game's DirectInput mouse (psGlobal: window, instance, fullScreen, lastMousePos, ?, the DirectInput interface,
-// then the mouse). Acquired, it holds the system's cursor where it is (exclusive), and our menu's and the chat's
-// cursor did not move: while the mouse is ours it is let go (Unacquire, every frame: the game acquires it again on
-// its own), and taken again after. Found as the second pointer there that is a DirectInput object (its vtable in
-// dinput8.dll), so a wrong guess at the layout leaves it alone.
-static bool InDinput(const void* p) {
-    HMODULE mod = nullptr;
-    wchar_t path[MAX_PATH] = {};
-    if (!p || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)p, &mod) ||
-        !GetModuleFileNameW(mod, path, MAX_PATH))
-        return false;
-    std::wstring name = path;
-    CharLowerBuffW(name.data(), (DWORD)name.size());
-    return name.find(L"dinput") != std::wstring::npos;
-}
-static void* GameMouse() {
-    void* ps = game::Ref<void*>(game::addr::RsGlobal + 0x14);
-    if (!ps || IsBadReadPtr(ps, 0x30)) return nullptr;
-    int found = 0;
-    for (uintptr_t off = 0x10; off <= 0x28; off += 4) {
-        void* obj = game::Field<void*>(ps, off);
-        if (!obj || IsBadReadPtr(obj, 4) || IsBadReadPtr(*(void**)obj, 0x40) || !InDinput(*(void**)obj)) continue;
-        if (++found == 2) return obj;
-    }
-    return nullptr;
-}
-static void MouseDevice(bool acquire) {
-    void* dev = GameMouse();
-    if (!dev) return;
-    using Fn = long(__stdcall*)(void*);
-    Fn fn = (Fn)(*(void***)dev)[acquire ? 7 : 8];  // IDirectInputDevice8::Acquire / Unacquire
-    fn(dev);
-}
 
 static LRESULT CALLBACK CoopWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (In().OnMessage(msg, wp, lp)) return 0;
@@ -79,11 +47,26 @@ void Input::SetKeyboardCapture(bool on) {
     m_kbCapture = on;
 }
 
+// In exclusive fullscreen the game holds the mouse in DirectInput's exclusive mode (its play: diMouseInit(fullscreen and no
+// menu)): Windows' cursor stands still, and ours (GetCursorPos) froze on the F9 window with the invite code (issue #66).
+// Ours then moves by the game's own reading of the mouse. Taking the game's device into the shared mode while ours was out
+// and back left it unacquired: the camera stood still after the window closed, and after joining, till an alt-tab.
+// This fork's borderless window is the game's fullscreen to DirectInput as well (the mouse is set up exclusive before the
+// window mode is applied, psGlobal.fullScreen says windowed by then): its cursor stood still too. So the game's reading
+// of the mouse moves ours whenever the game's own menu does not hold it.
+static bool GameMouseExclusive() { return !game::Ref<uint8_t>(0xBA67A4); }  // no menu of the game's
+
+bool Input::CursorFromGameMouse() const { return m_mouseCapture && GameMouseExclusive(); }
+
+void Input::FeedGameMouse(float dx, float dy, bool lmb, int wheel) {
+    m_gameX += dx * 1.25f, m_gameY += dy * 1.25f;
+    m_gameLmb = lmb;
+    m_state.wheel += wheel;  // the window gets no wheel messages either
+}
+
 void Input::SetMouseCapture(bool on) {
     if (on == m_mouseCapture) return;
     m_mouseCapture = on;
-    MouseDevice(!on);
-    if (on) ClipCursor(nullptr);
     if (on) {
         // put the cursor in the middle so the user sees it
         RECT rc;
@@ -105,7 +88,6 @@ void Input::EndFrame() {
 
 void Input::UpdateMouse(float bbW, float bbH) {
     if (!m_hwnd) return;
-    if (m_mouseCapture && game::IsForeground()) MouseDevice(false);  // the game may have taken it again
     POINT p;
     GetCursorPos(&p);
     ScreenToClient((HWND)m_hwnd, &p);
@@ -113,11 +95,18 @@ void Input::UpdateMouse(float bbW, float bbH) {
     GetClientRect((HWND)m_hwnd, &rc);
     float cw = (float)(rc.right - rc.left), ch = (float)(rc.bottom - rc.top);
     if (cw <= 0 || ch <= 0) return;
+    bool fromGame = CursorFromGameMouse();
+    if (fromGame && !m_fromGame) m_gameX = (float)p.x, m_gameY = (float)p.y, m_gameLmb = false;  // ours starts where Windows' stands
+    m_fromGame = fromGame;
+    if (fromGame) {
+        m_gameX = std::clamp(m_gameX, 0.0f, cw - 1.0f), m_gameY = std::clamp(m_gameY, 0.0f, ch - 1.0f);
+        p.x = (LONG)m_gameX, p.y = (LONG)m_gameY;
+    }
     m_state.mouseX = (float)p.x * bbW / cw;
     m_state.mouseY = (float)p.y * bbH / ch;
     m_state.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     m_state.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 && game::IsForeground();
+    bool down = fromGame ? m_gameLmb : (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 && game::IsForeground();
     if (down && !m_state.lmb) m_state.lmbPressed = true;
     if (!down && m_state.lmb) m_state.lmbReleased = true;
     m_state.lmb = down;

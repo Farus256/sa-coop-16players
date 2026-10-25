@@ -20,6 +20,7 @@
 #include "common/api/protocol/Protocol.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
+#include "entities/mission/Mission.h"
 #include "entities/ped/Peds.h"
 #include "entities/player/Players.h"
 #include "entities/profile/Profile.h"
@@ -65,6 +66,13 @@ void RebuildPlayer(CPlayerPed* ped, bool keepDescFatMuscle) { Call<0x5A82C0>(ped
 bool g_lookOwn = false;
 uint32_t g_givenKeys[28] = {};   // the clothes (model and texture keys) of a given look
 std::vector<uint8_t> g_ownLook;  // the CJ of the last game of its own this player played (not a host's world)
+// and kept on disk: joined right after the game's start, the CJ was taken from the newest save, often the host's world
+// the player had saved as a partner, and the host's clothes became the partner's own
+// in the player's own user files (next to the saves): copies of the game on one PC, each with its user_dir, keep their own
+std::wstring OwnLookPath() {
+    std::wstring dir = core::UserFilesDir();
+    return dir.empty() ? std::wstring() : dir + L"coop_own_look.bin";
+}
 bool g_foreignGame = false;      // the game was started as a partner: a host's world, kept after leaving it too
 
 bool LookIsOwn() { return g_lookOwn || memcmp(FindPlayerPed(0)->ClothesDesc(), g_givenKeys, sizeof g_givenKeys) != 0; }
@@ -103,6 +111,7 @@ bool LookFromSave(const std::wstring& path, std::vector<uint8_t>& look) {
 bool WearOwnLook(bool body) {
     std::vector<uint8_t> look = g_ownLook;
     std::wstring newest;
+    if (look.empty() && (!ReadFileBytes(OwnLookPath(), look) || look.size() != kClothesSize)) look.clear();
     if (look.empty()) {
         FILETIME newestTime{};
         for (int slot = 1; slot <= 8; ++slot) {
@@ -115,8 +124,12 @@ bool WearOwnLook(bool body) {
         if (newest.empty() || !LookFromSave(newest, look)) return false;
     }
     const auto* desc = (const CPedClothesDesc*)look.data();
-    if (body) Ref<float>(0xB793D4) = desc->fatStat, Ref<float>(0xB793DC) = desc->muscleStat;  // CStats: fat, muscle
     CPlayerPed* me = FindPlayerPed(0);
+    if (!memcmp(look.data(), me->ClothesDesc(), sizeof g_givenKeys)) {  // the host's world's own CJ: nothing of ours
+        LOGI("The look found (%s) is the world's CJ: not taken as ours", newest.empty() ? "kept" : WideToUtf8(newest).c_str());
+        return false;
+    }
+    if (body) Ref<float>(0xB793D4) = desc->fatStat, Ref<float>(0xB793DC) = desc->muscleStat;  // CStats: fat, muscle
     memcpy(me->ClothesDesc(), look.data(), kClothesSize);
     RebuildPlayer(me, false);  // fat and muscle from the stats
     LOGI("Own look put on (%s): torso %08X, head %08X", newest.empty() ? "the game played before" : WideToUtf8(newest).c_str(),
@@ -184,6 +197,271 @@ uint32_t JumpKey(const uint8_t* j) {
     return h;
 }
 
+// A job's asset pays through a revenue pickup kept in the save: the host's world has the host's only. Made as the job's
+// script makes it, where it is missing.
+int AssetPickups() {
+    int made = 0;
+    for (const Asset& a : kAssets) {
+        if (!Global(a.done)) continue;
+        bool there = false;
+        for (int i = 0; i < 620 && !there; ++i) {
+            uintptr_t pu = 0x9788C0 + (uintptr_t)i * 0x20;  // CPickups::aPickUps: +0x10 x/y/z in eighths, +0x1C type
+            CVector at{Ref<int16_t>(pu + 0x10) / 8.0f, Ref<int16_t>(pu + 0x12) / 8.0f, Ref<int16_t>(pu + 0x14) / 8.0f};
+            there = Ref<uint8_t>(pu + 0x1C) == 16 && (at - CVector{a.x, a.y, a.z}).Length() < 3.0f;  // PICKUP_ASSET_REVENUE
+        }
+        if (there) continue;
+        int h = -1;
+        Cmd(0x04A6).F(a.x).F(a.y).F(a.z).I(2000).I(2000).Out(&h).Run();  // CREATE_PROTECTION_PICKUP
+        ++made;
+    }
+    return made;
+}
+
+// ---------------------------------------------------------------- side jobs and challenges done for both
+// A job or a challenge one player finishes counts for the other too: its "done" global, its first-completion reward (as
+// the job's script gives it: max health, armour, fireproof, taxis with nitro...) and, in the host's world, its progress
+// and odd job. The world's own (the challenges) were the host's only: a partner's run was gone at its next reload.
+enum : uint8_t {
+    RW_NONE, RW_PARAMEDIC, RW_VIGILANTE, RW_FIREFIGHTER, RW_BURGLARY, RW_TAXI, RW_PIMP, RW_ASSET, RW_STAMINA, RW_BLOOD_BOWL
+};
+struct DoneFlag {
+    uint16_t global;
+    uint8_t reward;
+    bool progress, oddJob;  // PLAYER_MADE_PROGRESS 1, REGISTER_ODDJOB_MISSION_PASSED: the host's world
+    bool world;             // the world's flag (not kept in the partner's profile)
+};
+constexpr DoneFlag kDoneFlags[] = {
+    {1487, RW_PARAMEDIC, true, true, false},   {1488, RW_VIGILANTE, true, true, false},  {1489, RW_FIREFIGHTER, true, true, false},
+    {1490, RW_BURGLARY, false, false, false},  {1491, RW_TAXI, true, true, false},       {1492, RW_ASSET, true, true, false},
+    {1493, RW_ASSET, true, true, false},       {1991, RW_PIMP, true, true, false},       {1992, RW_ASSET, true, true, false},
+    {1993, RW_ASSET, true, true, false},       {1994, RW_ASSET, true, true, false},      {8240, RW_NONE, false, true, false},
+    {8239, RW_NONE, true, true, false},        {1900, RW_ASSET, false, false, false},  // freight 1 and 2, valet
+    {90, RW_NONE, true, true, true},           {1941, RW_BLOOD_BOWL, true, true, true},  {1806, RW_STAMINA, false, true, true},
+    {2795, RW_NONE, true, false, true},        {2796, RW_NONE, true, false, true},       {1801, RW_NONE, true, true, true},
+};  // the last six: Kickstart, Blood Bowl, the triathlons, the BMX and NRG-500 challenges, the Chiliad Challenge
+std::map<uint16_t, int32_t> g_doneSeen;  // the flags as this game last saw them (a change of ours goes out)
+
+const DoneFlag* DoneFlagOf(uint16_t global) {
+    for (const DoneFlag& d : kDoneFlags)
+        if (d.global == global) return &d;
+    return nullptr;
+}
+
+void SendDone(const std::vector<std::pair<uint16_t, int32_t>>& done) {
+    if (done.empty()) return;
+    Writer w(proto::G_SIDE_DONE);
+    w.U8((uint8_t)done.size());
+    for (auto [g, v] : done) w.U16(g), w.I32(v);
+    Net().Send(proto::CH_RELIABLE, w);
+}
+
+// the other player's completion here: the flag, its reward, and in the host's world its progress
+void TakeDone(const DoneFlag& d, int32_t value) {
+    if (Global(d.global)) return;  // done here already: the reward came then
+    Global(d.global) = value;
+    g_doneSeen[d.global] = value;
+    CPlayerPed* me = FindPlayerPed(0);
+    switch (d.reward) {
+    case RW_PARAMEDIC: Call<0x55C180>((uint16_t)24, Call<0x558E40, float>((uint16_t)24) * 1.5f); break;  // max health x2.5
+    case RW_VIGILANTE: Cmd(0x055F).I(0).I(50).Run(), Cmd(0x035F).I(GetPedRef(me)).I(150).Run(); break;  // max armour, armour
+    case RW_FIREFIGHTER: Cmd(0x055D).I(0).I(1).Run(); break;  // MAKE_PLAYER_FIRE_PROOF
+    case RW_BURGLARY: Cmd(0x0330).I(0).I(1).Run(); break;     // SET_PLAYER_NEVER_GETS_TIRED
+    case RW_TAXI: Ref<uint8_t>(0x969130 + 91) = 1; break;     // CCheat::m_aCheatsActive: taxis with nitro (not toggled)
+    case RW_PIMP: Ref<uint8_t>(0x969130 + 90) = 1; break;     // the pimp's cheat
+    case RW_ASSET: AssetPickups(); break;
+    case RW_STAMINA: {
+        float& stamina = Ref<float>(kStatsBlock + kFloatStats + 22 * 4);
+        stamina = std::max(stamina, 1000.0f);
+        break;
+    }
+    case RW_BLOOD_BOWL:
+        if (Net().IsHost()) Cmd(0x014C).I(Global(5188)).I(101).Run();  // SWITCH_CAR_GENERATOR: its reward car, for good
+        break;
+    }
+    if (Net().IsHost()) {  // the world's progress and its odd jobs (the partner's follow the host's world)
+        if (d.progress) Cmd(0x030C).I(1).Run();  // PLAYER_MADE_PROGRESS
+        if (d.oddJob) Cmd(0x0595).Run();        // REGISTER_ODDJOB_MISSION_PASSED
+    }
+    LOGI("The other player's completion %u: here too (reward %u)", d.global, d.reward);
+}
+
+void HandleDone(uint8_t from, Reader& r) {
+    std::vector<std::pair<uint16_t, int32_t>> done(r.U8());
+    for (auto& [g, v] : done) g = r.U16(), v = r.I32();
+    if (!r.Ok() || from == Net().MyId() || !core::IsPlayerReady() || !flow::InSharedWorld()) return;
+    for (auto [g, v] : done)
+        if (const DoneFlag* d = DoneFlagOf(g); d && v > 0 && v < 256) TakeDone(*d, v);
+}
+
+// every second: a flag of ours newly up goes to the other player
+void WatchDone(bool rebase) {
+    std::vector<std::pair<uint16_t, int32_t>> up;
+    for (const DoneFlag& d : kDoneFlags) {
+        int32_t v = Global(d.global), &seen = g_doneSeen[d.global];
+        if (!rebase && v > 0 && seen == 0) up.push_back({d.global, v});
+        seen = v;
+    }
+    SendDone(up);
+}
+
+std::map<uint16_t, int32_t> WorldDoneFlags() {
+    std::map<uint16_t, int32_t> world;
+    for (const DoneFlag& d : kDoneFlags)
+        if (!d.world) world[d.global] = Global(d.global);
+    return world;
+}
+
+// The partner's profile goes over the host's world: of the jobs either finished while the other was away, the host's
+// reward comes here and the partner's goes to the host
+void MergeDoneFlags(const std::map<uint16_t, int32_t>& world) {
+    std::vector<std::pair<uint16_t, int32_t>> ours;
+    for (const DoneFlag& d : kDoneFlags) {
+        if (d.world) continue;
+        int32_t mine = Global(d.global), theirs = world.at(d.global);
+        if (mine > 0 && theirs == 0) ours.push_back({d.global, mine});
+        if (theirs > 0 && mine == 0) TakeDone(d, theirs);
+    }
+    SendDone(ours);
+    WatchDone(true);
+}
+
+// ---------------------------------------------------------------- the stats tab, shared
+// Both players' stats tab goes on together: each game sends what changed in it every second, counters as amounts added
+// (distances, fares, kills, photos...), records as values (the higher, a best time or place the lower), and the host the
+// world's own. What each game counts by itself stays its own: the body and the gym, lungs, guns, money, dates, respect.
+// The skills hard to get (driving, flying, a bike, a bicycle, gambling) go to the better of the two.
+enum : uint8_t { R_ADD = 1, R_MAX = 2, R_MIN = 3, R_SET = 4 };
+struct StatRange {
+    uint16_t first, last;
+    uint8_t rule;
+};
+constexpr StatRange kSharedStats[] = {
+    {3, 9, R_ADD},       {26, 27, R_ADD},     {36, 36, R_ADD},     {41, 41, R_ADD},     {121, 132, R_ADD},  // distances, kills
+    {138, 138, R_ADD},   {149, 155, R_ADD},   {161, 163, R_ADD},   {166, 169, R_ADD},   {171, 171, R_ADD},  // jobs, gangs
+    {173, 173, R_ADD},   {177, 179, R_ADD},   {182, 183, R_ADD},   {191, 192, R_ADD},   {194, 197, R_ADD},
+    {201, 201, R_ADD},   {217, 218, R_ADD},   {234, 235, R_ADD},   {238, 240, R_ADD},
+    {2, 2, R_MAX},       {10, 12, R_MAX},     {17, 19, R_MAX},     {40, 40, R_MAX},     {51, 51, R_MAX},    // records
+    {81, 81, R_MAX},     {139, 143, R_MAX},   {157, 160, R_MAX},   {174, 175, R_MAX},   {205, 211, R_MAX},  // and skills
+    {215, 215, R_MAX},   {223, 223, R_MAX},   {229, 230, R_MAX},
+    {48, 49, R_MIN},     {172, 172, R_MIN},   {202, 202, R_MIN},   {212, 212, R_MIN},   {219, 222, R_MIN},  // best times
+    {246, 250, R_MIN},   {258, 301, R_MIN},
+    {0, 1, R_SET},       {146, 148, R_SET},   {180, 181, R_SET},   {302, 342, R_SET},  // the world's, host -> partner
+};
+uint8_t RuleOf(uint16_t id) {
+    for (const StatRange& r : kSharedStats)
+        if (id >= r.first && id <= r.last) return r.rule;
+    return 0;
+}
+uint32_t& StatBits(uint16_t id) {  // ids 0..81 are floats (StatTypesFloat), 120..342 ints
+    return Ref<uint32_t>(id < 82 ? kStatsBlock + kFloatStats + id * 4u : kStatsBlock + (id - 120u) * 4u);
+}
+double StatNum(uint16_t id, uint32_t bits) {
+    if (id >= 82) return (double)(int32_t)bits;
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
+uint32_t StatBitsOf(uint16_t id, double v) {
+    if (id >= 82) return (uint32_t)(int32_t)std::llround(v);
+    float f = (float)v;
+    uint32_t b;
+    memcpy(&b, &f, 4);
+    return b;
+}
+
+struct StatEntry {
+    uint16_t id;
+    uint8_t rule;
+    uint32_t bits;
+};
+uint32_t g_statBase[343];  // the shared stats as last seen: what changed since goes out
+bool g_statBased = false;  // false: rebase first (a world loaded, a profile went on, a player came)
+std::vector<StatEntry> g_statQueue;  // arrived before this game could take them (a world loading, no profile yet)
+bool g_statAnswer = false;  // a full set came: ours goes back once we are ready
+
+template <typename F>
+void ForSharedStats(F f) {
+    for (const StatRange& r : kSharedStats)
+        for (uint16_t id = r.first; id <= r.last; ++id) f(id, r.rule);
+}
+
+void SendStats(uint8_t full, const std::vector<StatEntry>& out) {
+    for (size_t at = 0; at < out.size(); at += 200) {
+        size_t n = std::min<size_t>(200, out.size() - at);
+        Writer w(proto::G_STAT_SYNC);
+        w.U8(full);
+        w.U8((uint8_t)n);
+        for (size_t i = at; i < at + n; ++i) w.U16(out[i].id), w.U8(out[i].rule), w.U32(out[i].bits);
+        Net().Send(proto::CH_RELIABLE, w);
+    }
+}
+
+// all our records, skills and (the host) world stats: a newcomer takes the better ones
+void SendFullStats(uint8_t full) {
+    std::vector<StatEntry> out;
+    ForSharedStats([&](uint16_t id, uint8_t rule) {
+        if (rule == R_ADD || (rule == R_SET && !Net().IsHost())) return;
+        out.push_back({id, rule, StatBits(id)});
+    });
+    SendStats(full, out);
+}
+
+void ApplyStat(const StatEntry& e) {
+    uint32_t& cur = StatBits(e.id);
+    double a = StatNum(e.id, cur), b = StatNum(e.id, e.bits);
+    if (e.rule == R_ADD) {
+        b = std::clamp(b, 0.0, e.id < 82 ? 1e6 : 100000.0);
+        cur = StatBitsOf(e.id, a + b);
+        g_statBase[e.id] = StatBitsOf(e.id, StatNum(e.id, g_statBase[e.id]) + b);  // ours did not change: nothing goes back
+        return;
+    }
+    if (e.rule == R_MAX && b > a) cur = e.bits;
+    else if (e.rule == R_MIN && b > 0 && (a == 0 || b < a)) cur = e.bits;
+    else if (e.rule == R_SET && !Net().IsHost()) cur = e.bits;
+    g_statBase[e.id] = cur;
+}
+
+void HandleStatSync(uint8_t from, Reader& r) {
+    uint8_t full = r.U8();
+    std::vector<StatEntry> in(r.U8());
+    for (StatEntry& e : in) e.id = r.U16(), e.rule = r.U8(), e.bits = r.U32();
+    if (!r.Ok() || from == Net().MyId()) return;
+    for (const StatEntry& e : in) {
+        // only the listed stats with their own rule: the message comes from another game
+        if (e.id > 342 || (e.id >= 82 && e.id < 120) || RuleOf(e.id) != e.rule || (e.rule == R_SET && from != Net().HostId()))
+            continue;
+        if (g_statQueue.size() < 2000) g_statQueue.push_back(e);
+    }
+    if (full == 1) g_statAnswer = true;
+    LOGD("Shared stats: %zu from player %u%s", in.size(), from, full ? " (all records)" : "");
+}
+
+// every second, in the shared world (the partner: once its profile is on)
+void StatTick(bool ready) {
+    if (!ready) return;
+    if (!g_statBased) {  // a load nobody's stats came from: taken as it is, then our records go out
+        ForSharedStats([](uint16_t id, uint8_t) { g_statBase[id] = StatBits(id); });
+        g_statBased = true;
+        SendFullStats(1);
+        WatchDone(true);
+    }
+    for (const StatEntry& e : g_statQueue) ApplyStat(e);
+    g_statQueue.clear();
+    if (g_statAnswer) g_statAnswer = false, SendFullStats(2);
+    std::vector<StatEntry> out;
+    ForSharedStats([&](uint16_t id, uint8_t rule) {
+        uint32_t cur = StatBits(id), &base = g_statBase[id];
+        if (cur == base || (rule == R_SET && !Net().IsHost())) return;
+        if (rule != R_ADD) out.push_back({id, rule, cur});
+        else if (double d = StatNum(id, cur) - StatNum(id, base); d > 0) out.push_back({id, rule, StatBitsOf(id, d)});
+        base = cur;  // a counter that went down (a fare folded into the odd jobs' total) only moves the base
+    });
+    // many at once is a world or a profile nobody announced: taken as it is
+    if (out.size() > 40) LOGI("Shared stats: %zu changed at once, taken as they are", out.size());
+    else SendStats(0, out);
+    WatchDone(false);
+}
+
 void WriteSideProgress(Writer& w) {
     std::vector<uint16_t> globals;
     for (const GlobalRange& r : kSideGlobals)
@@ -232,6 +510,7 @@ void ReadSideProgress(Reader& r, SideProgress& p) {
 void ApplySideProgress(const SideProgress& p) {
     bool flight = Global(87) == 1;  // the world's "Learning to Fly" passed: read before anything is written
     int globals = 0, generators = 0, jumps = 0, done = 0, pickups = 0;
+    std::map<uint16_t, int32_t> world = WorldDoneFlags();  // the host's completions, before the profile's go over them
     for (auto [n, v] : p.globals)  // only the listed ones: a profile is a file from the server
         if (Listed(kSideGlobals, n) || (flight && Listed(kFlightGlobals, n))) Global(n) = v, ++globals;
     for (auto [g, count, owned] : p.generators) {
@@ -250,20 +529,8 @@ void ApplySideProgress(const SideProgress& p) {
         done += j[0x40] != 0;
     }
     if (!p.jumps.empty()) Ref<int32_t>(0xA9A8A0) = done;  // CStuntJumpManager::m_iNumCompleted: all done pays the bonus
-    // a job's asset pays through a revenue pickup kept in the save: the host's world has the host's only
-    for (const Asset& a : kAssets) {
-        if (!Global(a.done)) continue;
-        bool there = false;
-        for (int i = 0; i < 620 && !there; ++i) {
-            uintptr_t pu = 0x9788C0 + (uintptr_t)i * 0x20;  // CPickups::aPickUps: +0x10 x/y/z in eighths, +0x1C type
-            CVector at{Ref<int16_t>(pu + 0x10) / 8.0f, Ref<int16_t>(pu + 0x12) / 8.0f, Ref<int16_t>(pu + 0x14) / 8.0f};
-            there = Ref<uint8_t>(pu + 0x1C) == 16 && (at - CVector{a.x, a.y, a.z}).Length() < 3.0f;  // PICKUP_ASSET_REVENUE
-        }
-        if (there) continue;
-        int h = -1;
-        Cmd(0x04A6).F(a.x).F(a.y).F(a.z).I(2000).I(2000).Out(&h).Run();  // CREATE_PROTECTION_PICKUP, as the job's script
-        ++pickups;
-    }
+    MergeDoneFlags(world);
+    pickups = AssetPickups();
     LOGI("Side progress back: %d values, %d reward cars, %d stunt jumps (%d done), %d asset pickups", globals, generators,
          jumps, done, pickups);
 }
@@ -280,7 +547,10 @@ std::vector<uint8_t> CaptureProfile() {
     memcpy(stats, (void*)kStatsBlock, kStatsSize);
     buffs::Undo(stats, maxHealth);  // what was eaten and drunk lasts a while only
     w.Bytes(stats, kStatsSize);
-    w.Bytes(me->ClothesDesc(), kClothesSize);
+    uint8_t clothes[kClothesSize];
+    memcpy(clothes, me->ClothesDesc(), kClothesSize);
+    MissionClothesUnder(clothes);  // a mask the host's mission put on is not the player's own
+    w.Bytes(clothes, kClothesSize);
     w.U8(NUM_WEAPON_SLOTS);
     for (int i = 0; i < NUM_WEAPON_SLOTS; ++i) {
         const CWeapon& wpn = me->Weapons()[i];
@@ -457,6 +727,8 @@ public:
         };
         Net().SetHandler(proto::G_PLAYER_LOOK, &HandleLook);
         Net().SetHandler(proto::G_PLAYER_STATS, &HandleStats);
+        Net().SetHandler(proto::G_STAT_SYNC, &HandleStatSync);
+        Net().SetHandler(proto::G_SIDE_DONE, &HandleDone);
         Net().SetHandler(proto::G_HOST_SAVED, [](uint8_t from, Reader&) {
             if (from != Net().HostId() || Net().IsHost() || !Instance().m_applied || !core::IsPlayerReady()) return;
             Instance().SaveNow(true);
@@ -470,9 +742,14 @@ public:
         m_profileReceived = m_applied = m_resetPending = m_reset = false;
         m_profile.clear();
         g_looks.clear();
+        g_statBased = false;
+        g_statQueue.clear();
     }
+    void OnSessionStart() override { g_statBased = false; }
+    void OnPeerJoin(uint8_t) override { g_statBased = false; }  // the newcomer gets our records and skills
     void OnGameStarted() override {  // a new world: the partner's profile goes on top again
         m_applied = false;
+        g_statBased = false;
         g_foreignGame = Net().Online() && !Net().IsHost();
         if (m_resetPending && flow::InHostWorld()) m_reset = true, m_resetPending = false;  // the new game's world
     }
@@ -480,7 +757,9 @@ public:
     void OnPostProcess() override {
         if (core::IsPlayerReady() && !g_foreignGame) {  // a game of its own: the look it brings along
             const auto* d = (const uint8_t*)FindPlayerPed(0)->ClothesDesc();
+            bool clothes = g_ownLook.size() != kClothesSize || memcmp(g_ownLook.data(), d, sizeof g_givenKeys);
             g_ownLook.assign(d, d + kClothesSize);
+            if (clothes) WriteFileBytes(OwnLookPath(), d, kClothesSize);  // on a change of clothes (fat and muscle drift)
         }
         if (!Net().Online() || !core::IsPlayerReady()) return;
         CPlayerPed* me = FindPlayerPed(0);
@@ -512,6 +791,7 @@ public:
             if (!g_lookOwn) memcpy(g_givenKeys, me->ClothesDesc(), sizeof g_givenKeys);
             m_saved = m_profile;
             m_lastSaveMs = now;
+            g_statBased = false;  // the profile's stats are ours: the shared ones start from them
         }
 
         // the host's own pick in the lobby (to try the characters): on its CJ once its world is up
@@ -529,6 +809,7 @@ public:
             m_lastLookMs = now;
             proto::PlayerMask newcomers = m_newcomers;
             m_newcomers = 0;
+            StatTick(Net().IsHost() ? flow::InSharedWorld() && !Net().Peers().empty() : hostWorld && m_applied);
             std::vector<uint8_t> desc((uint8_t*)me->ClothesDesc(), (uint8_t*)me->ClothesDesc() + kClothesSize);
             uint16_t model = me->ModelIndex();
             uint16_t fight = me->FightingStyle() | Field<uint8_t>(me, 0x72E) << 8;

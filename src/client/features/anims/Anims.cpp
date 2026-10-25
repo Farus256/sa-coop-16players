@@ -58,6 +58,9 @@ constexpr const char* kActivityBlocks[] = {
 
 // a hit's flinch: the shot partials and HIT_* of the default group (SHOT_PARTIAL 28 .. HIT_BEHIND 40)
 bool IsHitAnim(int id) { return id >= 28 && id <= 40; }
+// and a blow's in a fist fight: HITA_1..3 of the fighting style's group (MELEE_1 33 .. PISTLWHP 45). A punch in a row
+// plays those, not HIT_*: of 67 punches only 3 flinched on the copy.
+bool IsFlinch(int g, int id) { return (g == ANIM_GROUP_DEFAULT && IsHitAnim(id)) || (g >= 33 && g <= 45 && id >= 219 && id <= 221); }
 
 bool IsReplicated(int g, int id) {
     if (g == ANIM_GROUP_DEFAULT)  // the phone; choking; flinches
@@ -65,6 +68,7 @@ bool IsReplicated(int g, int id) {
     // a gun's reload (ANIM_ID_RELOAD, CROUCHRELOAD of the gun groups PYTHON .. SPRAYCAN and the player's rocket ones): the
     // copy's clip never runs dry (Players), so it never reloaded by itself
     if ((g >= 11 && g <= 31) || (g >= 57 && g <= 59)) return id == 226 || id == 227;
+    if (IsFlinch(g, id)) return true;
     for (int r : kReplicatedGroups)
         if (r == g) return true;
     return false;
@@ -125,7 +129,7 @@ bool CurrentActivity(CPed* ped, Activity& out) {
         uint16_t f = anim::Flags(a);
         bool fall = !(f & (anim::F_INDESTRUCTIBLE | anim::F_SECONDARY)) && (f & (anim::F_PARTIAL | anim::F_LOOPED)) !=
                     (anim::F_PARTIAL | anim::F_LOOPED) && anim::Group(a) != walk;
-        bool push = walked && (f & anim::F_PARTIAL) && !(f & anim::F_SECONDARY) && anim::Group(a) != walk;
+        bool push = walked && anim::Group(a) == 0 && anim::Id(a) == 153;  // ANIM_ID_WALK_DOORPARTIAL (a car door's are not)
         // A crouched roll (CROUCH_ROLL_L/R) starts on the stick held sideways while aiming: the copy, its stick a moment
         // late, rolled late, or made a crouched step instead by the split-screen rules (see Patches). It rolls as its owner.
         bool roll = anim::Group(a) == 0 && (anim::Id(a) == 57 || anim::Id(a) == 59);  // ANIM_GROUP_DEFAULT
@@ -262,7 +266,7 @@ public:
             int id = r.I16();
             float delta = r.F32();
             if (!r.Ok() || !IsReplicated(group, id)) return;
-            if (group == ANIM_GROUP_DEFAULT && IsHitAnim(id) && rp->animHeld) return;  // down: the activity shows it
+            if (IsFlinch(group, id) && rp->animHeld) return;  // down: the activity shows it
             const char* block = BlockForGroup(group);
             if (block && !EnsureBlockLoaded(block)) return;
             if (!block && group != ANIM_GROUP_DEFAULT && !GroupReady(group)) return;  // not in hand here (yet)
@@ -308,7 +312,7 @@ private:
         int group = -1, id = -1;
         for (void* a = anim::First(me->RwObject()); a; a = anim::Next(a)) {
             if (!IsReplicated(anim::Group(a), anim::Id(a)) || anim::BlendDelta(a) < 0.0f) continue;
-            if (anim::Group(a) == ANIM_GROUP_DEFAULT && IsHitAnim(anim::Id(a))) continue;  // SendHit's
+            if (IsFlinch(anim::Group(a), anim::Id(a))) continue;  // SendHit's
             group = anim::Group(a);
             id = anim::Id(a);
             break;
@@ -334,12 +338,12 @@ private:
     // proof (hits are applied where their target is owned) and never flinched under fire. Each new flinch goes out once.
     void SendHit(CPlayerPed* me) {
         for (void* a = anim::First(me->RwObject()); a; a = anim::Next(a)) {
-            if (anim::Group(a) != ANIM_GROUP_DEFAULT || !IsHitAnim(anim::Id(a)) || anim::BlendDelta(a) < 0.0f) continue;
+            if (!IsFlinch(anim::Group(a), anim::Id(a)) || anim::BlendDelta(a) < 0.0f) continue;
             if (a == m_lastHit) return;
             m_lastHit = a;
             Writer w(proto::G_PLAYER_ANIM);
             w.U8(OP_PLAY);
-            w.I16((int16_t)ANIM_GROUP_DEFAULT);
+            w.I16((int16_t)anim::Group(a));
             w.I16((int16_t)anim::Id(a));
             w.F32(8.0f);
             Net().Send(proto::CH_RELIABLE, w);

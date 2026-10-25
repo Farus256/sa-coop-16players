@@ -1,21 +1,27 @@
 // Voice chat: push-to-talk (or always on) capture with WinMM, 16 kHz mono, 20 ms frames, IMA ADPCM
 // (~68 kbit/s), sent unreliable on the voice channel. Every remote player gets its own waveOut stream
 // with a small jitter buffer; the volume fades with distance down to a "radio" floor.
-// WinMM runs without callbacks: buffers are polled once per game frame (8 x 20 ms of capture headroom).
-// The microphone opens when push-to-talk is first held (at once only with "always on") and closes again after half a
-// minute without it, so Windows shows it in use only around talking. /mute <nick> silences one player here.
+// WinMM runs without callbacks, polled every 5 ms by a thread of its own (8 x 20 ms of capture headroom). A WinMM call
+// blocks for a second now and then (waveInAddBuffer, on a player's machine with nobody talking): polled on the game's
+// thread, the whole game stood still that long, the lags of 1-2 s players reported. The game's thread only encodes,
+// sends and queues what it heard.
 #include "features/voice/Voice.h"
 
 #include <windows.h>
 #include <mmsystem.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "common/api/protocol/Protocol.h"
@@ -38,6 +44,7 @@ constexpr int kRate = 16000, kFrame = 320;  // 20 ms
 constexpr int kInBuffers = 8, kOutBuffers = 16;
 constexpr size_t kMaxQueue = 12;  // 240 ms: older audio is dropped
 constexpr size_t kStartQueue = 3;  // 60 ms of buffering before a stream starts
+using Frame = std::array<int16_t, kFrame>;
 
 WAVEFORMATEX Format16k() {
     WAVEFORMATEX f{};
@@ -50,23 +57,36 @@ WAVEFORMATEX Format16k() {
     return f;
 }
 
-struct Stream {
+// a remote player's playback device: the audio thread's alone
+struct Output {
     HWAVEOUT out = nullptr;
     WAVEHDR hdr[kOutBuffers] = {};
     int16_t buf[kOutBuffers][kFrame] = {};
-    std::deque<std::vector<int16_t>> queue;
     bool playing = false;
-    uint16_t lastSeq = 0;
-    bool hasSeq = false;
-    uint64_t lastHeardMs = 0;
 
-    ~Stream() {
+    Output() = default;
+    Output(const Output&) = delete;
+    Output& operator=(const Output&) = delete;
+    ~Output() {
         if (!out) return;
         waveOutReset(out);
         for (WAVEHDR& h : hdr)
             if (h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(out, &h, sizeof(h));
         waveOutClose(out);
     }
+};
+
+// what the game's thread heard from a remote player, for the audio thread to play
+struct Incoming {
+    std::deque<Frame> queue;
+    bool gone = false;  // the player left: its device closes
+};
+
+// a remote player's stream as the game's thread follows it
+struct Heard {
+    uint16_t lastSeq = 0;
+    bool hasSeq = false;
+    uint64_t lastHeardMs = 0;
 };
 
 class Voice : public Module {
@@ -82,7 +102,10 @@ public:
 
     void OnSessionStart() override {
         m_micWarned = m_silenceWarned = false;
-        if (Cfg().voiceEnabled && Cfg().voiceAlwaysOn && !m_testTone) OpenMic();
+        if (Cfg().voiceEnabled && !m_testTone) {
+            m_wantMic = true;
+            StartAudioThread();
+        }
     }
     bool OnCommand(const std::string& cmd, const std::vector<std::string>& args) override {
         if (cmd != "mute" && cmd != "unmute") return false;
@@ -102,7 +125,6 @@ public:
                 return true;
             }
             m_muted.insert(ToLower(name));
-            if (auto it = m_streams.find(id); it != m_streams.end()) it->second->queue.clear();
             chat.AddSystem(Format(TR("Голос %s заглушён (только у вас).", "%s is muted (for you only)."), name.c_str()));
         } else {
             m_muted.erase(ToLower(name));
@@ -111,20 +133,22 @@ public:
         return true;
     }
     void OnSessionEnd() override {
-        CloseMic();
-        m_streams.clear();
+        m_wantMic = false;
+        m_transmitting = false;
+        m_heard.clear();
+        std::lock_guard<std::mutex> lock(m_mx);
+        m_captured.clear();
+        for (auto& [id, in] : m_incoming) in.gone = true;
     }
-    void OnPeerLeave(uint8_t id) override { m_streams.erase(id); }
+    void OnPeerLeave(uint8_t id) override {
+        m_heard.erase(id);
+        std::lock_guard<std::mutex> lock(m_mx);
+        if (auto it = m_incoming.find(id); it != m_incoming.end()) it->second.gone = true;
+    }
 
     void OnPostProcess() override {
         if (!Net().Online()) return;
         PumpCapture();
-        if (m_transmitting) m_talkedMs = NowMs();
-        else if (m_in && !Cfg().voiceAlwaysOn && NowMs() - m_talkedMs > 30000) {  // not in use: Windows stops showing it
-            CloseMic();
-            LOGI("Voice: microphone closed (not used for 30 s)");
-        }
-        for (auto& [id, s] : m_streams) PumpPlayback(*s);
         if (m_rxFrames && NowMs() - m_rxLogMs > 5000) {
             m_rxLogMs = NowMs();
             LOGI("Voice: %d frames received, rms %.0f", m_rxFrames, std::sqrt(m_rxEnergy / (m_rxFrames * (double)kFrame)));
@@ -141,7 +165,7 @@ public:
             g.Text(ui::FONT_SMALL, 24 * s, y, TR("{FF5050}●{FFFFFF} Микрофон", "{FF5050}●{FFFFFF} Mic"), 0xFFFFFFFF, ui::TEXT_OUTLINE);
             y += g.LineHeight(ui::FONT_SMALL);
         }
-        for (auto& [id, stream] : m_streams)  // who is heard now, wherever they are (the name tag needs them in sight)
+        for (auto& [id, heard] : m_heard)  // who is heard now, wherever they are (the name tag needs them in sight)
             if (Speaking(id)) {
                 g.Text(ui::FONT_SMALL, 24 * s, y, "{FFDC50}((•)){FFFFFF} " + Net().PeerName(id), 0xFFFFFFFF, ui::TEXT_OUTLINE);
                 y += g.LineHeight(ui::FONT_SMALL);
@@ -149,8 +173,8 @@ public:
     }
 
     bool Speaking(uint8_t id) const {
-        auto it = m_streams.find(id);
-        return it != m_streams.end() && NowMs() - it->second->lastHeardMs < 300;
+        auto it = m_heard.find(id);
+        return it != m_heard.end() && NowMs() - it->second.lastHeardMs < 300;
     }
     bool Transmitting() const { return m_transmitting; }
 
@@ -160,12 +184,25 @@ public:
     }
 
 private:
+    void StartAudioThread() {
+        if (m_threadStarted) return;
+        m_threadStarted = true;
+        std::thread([this] {
+            for (;;) {
+                Sleep(5);
+                CaptureWork();
+                PlaybackWork();
+            }
+        }).detach();
+    }
+
+    // ---- the audio thread
     bool OpenMic() {
         WAVEFORMATEX f = Format16k();
         UINT dev = Cfg().micDevice < 0 ? WAVE_MAPPER : (UINT)Cfg().micDevice;
-        MMRESULT r = waveInOpen(&m_in, dev, &f, 0, 0, CALLBACK_NULL);
+        MMRESULT r = waveInOpen(&m_hin, dev, &f, 0, 0, CALLBACK_NULL);
         if (r != MMSYSERR_NOERROR) {
-            m_in = nullptr;
+            m_hin = nullptr;
             LOGW("Voice: no microphone available (waveInOpen failed: %u)", r);
             return false;
         }
@@ -173,11 +210,11 @@ private:
             m_inHdr[i] = {};
             m_inHdr[i].lpData = (LPSTR)m_inBuf[i];
             m_inHdr[i].dwBufferLength = sizeof(m_inBuf[i]);
-            waveInPrepareHeader(m_in, &m_inHdr[i], sizeof(WAVEHDR));
-            waveInAddBuffer(m_in, &m_inHdr[i], sizeof(WAVEHDR));
+            waveInPrepareHeader(m_hin, &m_inHdr[i], sizeof(WAVEHDR));
+            waveInAddBuffer(m_hin, &m_inHdr[i], sizeof(WAVEHDR));
         }
         m_nextIn = 0;
-        if ((r = waveInStart(m_in)) != MMSYSERR_NOERROR) {
+        if ((r = waveInStart(m_hin)) != MMSYSERR_NOERROR) {
             LOGW("Voice: the microphone does not start (waveInStart failed: %u)", r);
             CloseMic();
             return false;
@@ -187,15 +224,115 @@ private:
     }
 
     void CloseMic() {
-        if (!m_in) return;
-        waveInReset(m_in);
+        if (!m_hin) return;
+        waveInReset(m_hin);
         for (WAVEHDR& h : m_inHdr)
-            if (h.dwFlags & WHDR_PREPARED) waveInUnprepareHeader(m_in, &h, sizeof(h));
-        waveInClose(m_in);
-        m_in = nullptr;
-        m_transmitting = false;
+            if (h.dwFlags & WHDR_PREPARED) waveInUnprepareHeader(m_hin, &h, sizeof(h));
+        waveInClose(m_hin);
+        m_hin = nullptr;
     }
 
+    void CaptureWork() {
+        if (!m_wantMic) {
+            CloseMic();
+            m_micTriedMs = 0;
+            return;
+        }
+        if (!m_hin) {
+            // at the session's start, then again every 3 s while the key is held: the microphone may be plugged in or
+            // allowed later
+            if (m_micTriedMs && (!m_keyHeld || NowMs() - m_micTriedMs < 3000)) return;
+            bool retry = m_micTriedMs != 0;
+            m_micTriedMs = NowMs();
+            if (!OpenMic() && retry) m_micFailed = true;  // the game's thread tells the player
+            return;
+        }
+        // in the order they were queued: by index, a wrap-around would swap 20 ms pieces
+        for (int n = 0; n < kInBuffers; ++n) {
+            WAVEHDR& h = m_inHdr[m_nextIn];
+            if (!(h.dwFlags & WHDR_DONE)) break;
+            {
+                std::lock_guard<std::mutex> lock(m_mx);
+                if (h.dwBytesRecorded == sizeof(m_inBuf[m_nextIn])) {
+                    m_captured.emplace_back();
+                    memcpy(m_captured.back().data(), m_inBuf[m_nextIn], sizeof(m_inBuf[m_nextIn]));
+                    while (m_captured.size() > (size_t)kInBuffers) m_captured.pop_front();
+                } else {
+                    m_captureGap = true;
+                }
+            }
+            h.dwFlags &= ~WHDR_DONE;
+            h.dwBytesRecorded = 0;
+            waveInAddBuffer(m_hin, &h, sizeof(WAVEHDR));
+            m_nextIn = (m_nextIn + 1) % kInBuffers;
+        }
+    }
+
+    void PlaybackWork() {
+        std::vector<uint8_t> ids;
+        {
+            std::lock_guard<std::mutex> lock(m_mx);
+            for (auto& [id, in] : m_incoming) ids.push_back(id);
+        }
+        for (uint8_t id : ids) {
+            Output& o = m_outputs[id];
+            int free = 0;
+            if (o.out)
+                for (WAVEHDR& h : o.hdr) free += (h.dwFlags & WHDR_DONE) ? 1 : 0;
+            std::vector<Frame> take;
+            bool gone = false, more = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mx);
+                auto in = m_incoming.find(id);
+                if (in == m_incoming.end() || in->second.gone) {
+                    gone = true;
+                    if (in != m_incoming.end()) m_incoming.erase(in);
+                } else {
+                    auto& q = in->second.queue;
+                    if (o.playing || q.size() >= kStartQueue) {
+                        size_t n = std::min(q.size(), o.out ? (size_t)free : (size_t)kOutBuffers);
+                        for (size_t i = 0; i < n; ++i) take.push_back(q.front()), q.pop_front();
+                    }
+                    more = !q.empty();
+                }
+            }
+            if (gone) {
+                m_outputs.erase(id);  // ~Output closes its device
+                continue;
+            }
+            if (!o.out) {
+                if (take.empty()) continue;
+                WAVEFORMATEX f = Format16k();
+                UINT dev = Cfg().speakerDevice < 0 ? WAVE_MAPPER : (UINT)Cfg().speakerDevice;
+                if (waveOutOpen(&o.out, dev, &f, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+                    o.out = nullptr;
+                    continue;  // what came is dropped, the next try comes with the next talk
+                }
+                for (WAVEHDR& h : o.hdr) h.dwFlags = WHDR_DONE;  // all free
+            }
+            bool any = false;
+            size_t next = 0;
+            for (int i = 0; i < kOutBuffers; ++i) {
+                WAVEHDR& h = o.hdr[i];
+                if (!(h.dwFlags & WHDR_DONE)) {
+                    any = true;
+                    continue;
+                }
+                if (next >= take.size()) continue;
+                if (h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(o.out, &h, sizeof(h));
+                memcpy(o.buf[i], take[next++].data(), sizeof(o.buf[i]));
+                h = {};
+                h.lpData = (LPSTR)o.buf[i];
+                h.dwBufferLength = sizeof(o.buf[i]);
+                waveOutPrepareHeader(o.out, &h, sizeof(h));
+                waveOutWrite(o.out, &h, sizeof(h));
+                any = true;
+            }
+            o.playing = any || more;  // re-buffer after a gap
+        }
+    }
+
+    // ---- the game's thread
     bool PushToTalk() const {
         if (Cfg().voiceAlwaysOn || m_testTone) return true;
         // only while our window is active and nobody types in the chat
@@ -204,6 +341,7 @@ private:
 
     void PumpCapture() {
         m_transmitting = Cfg().voiceEnabled && PushToTalk();  // the indicator shows the key even without a microphone
+        m_keyHeld = m_transmitting;
         if (m_testTone) {
             uint64_t now = NowMs();
             if (now - m_toneMs > 200) m_toneMs = now;
@@ -215,26 +353,23 @@ private:
             LogSent();
             return;
         }
-        if (!m_in) {
-            // the microphone may be plugged in or allowed later: tried again while the key is held
-            if (!m_transmitting || NowMs() - m_micTriedMs < 3000) return;
-            m_micTriedMs = NowMs();
-            if (OpenMic() || m_micWarned) return;
+        if (m_micFailed.exchange(false) && !m_micWarned) {
             m_micWarned = true;
             ui::TheChat().AddError(TR("Не удалось открыть микрофон. Проверьте, что он подключён, а в Windows разрешён доступ к микрофону для классических приложений.",
                                       "Could not open the microphone. Check that it is plugged in and that Windows lets desktop apps use the microphone."));
-            return;
         }
-        // in the order they were queued: by index, a wrap-around would swap 20 ms pieces
-        for (int n = 0; n < kInBuffers; ++n) {
-            WAVEHDR& h = m_inHdr[m_nextIn];
-            if (!(h.dwFlags & WHDR_DONE)) break;
-            if (m_transmitting && h.dwBytesRecorded == sizeof(m_inBuf[m_nextIn])) Send(m_inBuf[m_nextIn]);
+        std::deque<Frame> frames;
+        bool gap;
+        {
+            std::lock_guard<std::mutex> lock(m_mx);
+            frames.swap(m_captured);
+            gap = m_captureGap;
+            m_captureGap = false;
+        }
+        if (gap) m_enc = {};
+        for (Frame& f : frames) {
+            if (m_transmitting) Send(f.data());
             else m_enc = {};  // a new talk spurt starts from silence
-            h.dwFlags &= ~WHDR_DONE;
-            h.dwBytesRecorded = 0;
-            waveInAddBuffer(m_in, &h, sizeof(WAVEHDR));
-            m_nextIn = (m_nextIn + 1) % kInBuffers;
         }
         LogSent();
     }
@@ -275,20 +410,23 @@ private:
         if (!r.Ok() || from == Net().MyId() || !Cfg().voiceEnabled || m_muted.count(ToLower(Net().PeerName(from))) ||
             !adpcm::Decode(data.data(), data.size(), pcm) || pcm.size() != kFrame)
             return;
-        auto& slot = m_streams[from];
-        if (!slot) slot = std::make_unique<Stream>();
-        Stream& s = *slot;
-        if (s.hasSeq && (int16_t)(seq - s.lastSeq) <= 0) return;  // late or duplicate
+        Heard& h = m_heard[from];
+        if (h.hasSeq && (int16_t)(seq - h.lastSeq) <= 0) return;  // late or duplicate
         for (int16_t v : pcm) m_rxEnergy += (double)v * v;
         ++m_rxFrames;
-        s.lastSeq = seq;
-        s.hasSeq = true;
-        s.lastHeardMs = NowMs();
-        if (RemotePlayer* rp = Players::Instance().Get(from)) rp->heardMs = s.lastHeardMs;  // its name tag
+        h.lastSeq = seq;
+        h.hasSeq = true;
+        h.lastHeardMs = NowMs();
+        if (RemotePlayer* rp = Players::Instance().Get(from)) rp->heardMs = h.lastHeardMs;  // its name tag
         float vol = Cfg().voiceVolume * Proximity(from);
-        for (int16_t& v : pcm) v = (int16_t)std::clamp(v * vol, -32768.0f, 32767.0f);
-        s.queue.push_back(std::move(pcm));
-        while (s.queue.size() > kMaxQueue) s.queue.pop_front();
+        Frame f;
+        for (int k = 0; k < kFrame; ++k) f[k] = (int16_t)std::clamp(pcm[k] * vol, -32768.0f, 32767.0f);
+        StartAudioThread();  // a player who only listens (no microphone of ours wanted)
+        std::lock_guard<std::mutex> lock(m_mx);
+        Incoming& in = m_incoming[from];
+        in.gone = false;
+        in.queue.push_back(f);
+        while (in.queue.size() > kMaxQueue) in.queue.pop_front();
     }
 
     // full volume up to 15 m, then down to a radio-like floor at 80 m (co-op partners keep talking)
@@ -300,50 +438,29 @@ private:
         return std::clamp(1.0f - (d - 15.0f) / 65.0f, 0.35f, 1.0f);
     }
 
-    void PumpPlayback(Stream& s) {
-        if (!s.out) {
-            if (s.queue.empty()) return;
-            WAVEFORMATEX f = Format16k();
-            UINT dev = Cfg().speakerDevice < 0 ? WAVE_MAPPER : (UINT)Cfg().speakerDevice;
-            if (waveOutOpen(&s.out, dev, &f, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
-                s.out = nullptr;
-                s.queue.clear();
-                return;
-            }
-            for (WAVEHDR& h : s.hdr) h.dwFlags = WHDR_DONE;  // all free
-        }
-        if (!s.playing && s.queue.size() < kStartQueue) return;
-        bool any = false;
-        for (int i = 0; i < kOutBuffers && !s.queue.empty(); ++i) {
-            WAVEHDR& h = s.hdr[i];
-            if (!(h.dwFlags & WHDR_DONE)) {
-                any = true;
-                continue;
-            }
-            if (h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(s.out, &h, sizeof(h));
-            memcpy(s.buf[i], s.queue.front().data(), sizeof(s.buf[i]));
-            s.queue.pop_front();
-            h = {};
-            h.lpData = (LPSTR)s.buf[i];
-            h.dwBufferLength = sizeof(s.buf[i]);
-            waveOutPrepareHeader(s.out, &h, sizeof(h));
-            waveOutWrite(s.out, &h, sizeof(h));
-            any = true;
-        }
-        s.playing = any || !s.queue.empty();  // re-buffer after a gap
-    }
+    // shared by the two threads
+    std::mutex m_mx;
+    std::deque<Frame> m_captured;  // whole 20 ms frames, oldest first
+    bool m_captureGap = false;     // a buffer came back short: the encoder starts over
+    std::map<uint8_t, Incoming> m_incoming;
+    std::atomic<bool> m_wantMic{false}, m_keyHeld{false}, m_micFailed{false};
+    bool m_threadStarted = false;  // the game's thread's
 
-    HWAVEIN m_in = nullptr;
+    // the audio thread's
+    HWAVEIN m_hin = nullptr;
     int m_nextIn = 0;  // the capture buffer the device fills first
-    uint64_t m_micTriedMs = 0, m_talkedMs = 0;
+    uint64_t m_micTriedMs = 0;
     std::set<std::string> m_muted;  // nicknames (lower case): a muted player stays so when it joins again
-    bool m_micWarned = false, m_silenceWarned = false;
     WAVEHDR m_inHdr[kInBuffers] = {};
     int16_t m_inBuf[kInBuffers][kFrame] = {};
+    std::map<uint8_t, Output> m_outputs;
+
+    // the game's thread's
+    bool m_micWarned = false, m_silenceWarned = false;
     adpcm::State m_enc;
     uint16_t m_seq = 0;
     bool m_transmitting = false;
-    std::map<uint8_t, std::unique_ptr<Stream>> m_streams;
+    std::map<uint8_t, Heard> m_heard;
     bool m_testTone = false;
     unsigned m_tonePhase = 0;
     uint64_t m_toneMs = 0;
