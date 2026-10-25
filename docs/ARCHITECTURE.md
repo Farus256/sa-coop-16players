@@ -2083,12 +2083,12 @@ Micro Uzi): его держат двумя руками, как полиция, 
 модель (лидер —
 особый персонаж в своём слоте 290-293: SWEET, SMOKE, RYDER, CESAR, `RequestSpecialModel` после `FindItem`; остальные —
 модели банды), оружие уровня (`REMOVE_ALL_CHAR_WEAPONS`, набор банды), отношения уличных банд к игроку
-(`SET_RELATIONSHIP`: своя — уважение, чужие — ненависть). Раз в 3 с (`KeepWorld`): плотности прохожих 0,08 и машин
-0,1, у движка `bGangWarsActive` с нулевой провокацией, карта открыта (`ZonesVisited` 0xBA3730, 10×10, все 1;
+(`SET_RELATIONSHIP`: своя — уважение, чужие — ненависть). Раз в 3 с (`KeepWorld`): плотности прохожих и машин 0,8, у движка `bGangWarsActive` с нулевой провокацией, карта открыта (`ZonesVisited` 0xBA3730, 10×10, все 1;
 `ZonesRevealed` 100), у уличных дверей `CEntryExit` снят `bEnableAccess` (+0x30, 0x4000: ни метки, ни входа),
 уличное оружие (пикапы типов 2 и 15 с моделями 321-372) убрано `CPickup::Remove`, люди банды с купленной бронёй
-получают её по разу. Убитый своим игроком прохожий (`CDarkel::RegisterKillByPlayer` 0x43DCD0, тип 4 или 5) — $50-150
-десятками в банк банды (op 17 KILL к хосту).
+получают её по разу. Ближе 250 м к капту: `CGangWars::GangWarFightingGoingOn` (0x443AC0) отвечает «да» (`CWanted::ReportCrimeNow`
+не заводит розыск, как в сюжетных войнах), розыск снимается (`CLEAR_WANTED_LEVEL`), а
+`CCarCtrl::GenerateEmergencyServicesCar` (0x42F9C0) не вызывается — ни полиции, ни скорой, ни пожарных.
 
 Части: `GangWar.cpp` (игрок, деньги, покупки, конвой, экран, меню), `Capt.cpp` (капты), `Base.cpp` (базы), общее —
 `War.h`. Капт: цель — район под меткой карты (`FrontEndMenuManager.m_nTargetBlipIndex`, след в `CRadar::ms_RadarTrace`),

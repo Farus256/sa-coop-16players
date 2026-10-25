@@ -6,8 +6,8 @@
 // there after a death. The streets have far fewer people and cars than usual. The gang's own people on the street
 // respect its players, the other gangs hate them; players of different gangs hurt each other (Damage). The city is the
 // war's: its territories in their gangs' colours on the map and the radar, the whole map known, no doors with markers,
-// no weapons lying about, and a passer-by killed pays the gang's bank $50-150. Each base has its guards and its door
-// into a house (Base.cpp).
+// no weapons lying about. Each base has its guards and its door into a house (Base.cpp). No police, ambulances or fire
+// engines come to an attack.
 //
 // The host's game keeps the war: every gang makes $200 of goods every 6 minutes (the Vagos sell faster; upgrades make
 // more of it, and dearer; the Ballas take protection money from the shops, bars and clubs in their territories), and
@@ -377,8 +377,8 @@ void EnterWar() {
 }
 
 // ---- the city of the war, in every game
-// Few people and cars on the streets (a passer-by or a car only now and then)
-constexpr float kPedDensity = 0.08f, kCarDensity = 0.10f;
+// A little fewer people and cars on the streets than the game has (0.5.2's few were too few)
+constexpr float kPedDensity = 0.8f, kCarDensity = 0.8f;
 
 // The engine's gang war statics: on, with no training mission and no zones of a mission's own, the radar and the map
 // draw every territory's square in its gang's colour (CRadar::DrawRadarGangOverlay asks
@@ -1028,10 +1028,6 @@ void HandleFeature(uint8_t from, uint8_t op, Reader& r) {
         uint8_t what = r.U8();
         if (r.Ok() && fromHost && what == GIFT_ARMOUR)
             if (CPlayerPed* me = FindPlayerPed(0); me && me->Health() > 0.0f) me->Armour() = 100.0f;
-    } else if (op == OP_KILL) {  // host: a passer-by killed by one of the gang's players pays the gang
-        uint16_t money = r.U16();
-        uint8_t gang = GangOf(from);
-        if (r.Ok() && Net().IsHost() && HostRunning() && gang < kGangs) HostState(gang).bank += std::clamp<int>(money, 50, 150);
     } else if (op == OP_CONVOY) {
         uint8_t on = r.U8();
         if (!r.Ok() || !fromHost) return;
@@ -1047,9 +1043,6 @@ void HandleFeature(uint8_t from, uint8_t op, Reader& r) {
     }
 }
 
-uint64_t g_killFlashMs = 0;  // a passer-by's money went to the bank: shown a moment by it
-int g_killFlash = 0;
-
 void DrawHud() {
     uint8_t gang = MyGang();
     if (gang >= kGangs) return;
@@ -1062,7 +1055,6 @@ void DrawHud() {
     g.Text(ui::FONT_NORMAL, x, y, g.Fit(ui::FONT_NORMAL, Name(gang), colW), gi.argb, ui::TEXT_RIGHT | ui::TEXT_OUTLINE);
     y += g.LineHeight(ui::FONT_NORMAL);
     std::string bank = Format(TR("Банк: $%d", "Bank: $%d"), st.bank);
-    if (g_killFlashMs && NowMs() - g_killFlashMs < 3000) bank += Format("  (+$%d)", g_killFlash);
     std::vector<std::string> lines = {
         bank,
         Format(TR("Районов: %d из %d", "Territories: %d of %d"), st.zones, (int)Territories().size()),
@@ -1210,21 +1202,30 @@ void __cdecl HookFillZones(bool disable) {
     if (On() && Started()) return;
     g_origFill(disable);
 }
-// CDarkel::RegisterKillByPlayer: a passer-by killed by this game's player pays its gang's bank $50-150 (in tens)
-using KillFn = void(__cdecl*)(CPed*, int, bool, int);
-KillFn g_origKill = nullptr;
-void __cdecl HookKillByPlayer(CPed* ped, int weapon, bool headshot, int player) {
-    g_origKill(ped, weapon, headshot, player);
-    if (!On() || !Started() || player != 0 || !ped || ped->IsPlayer() || Players::Instance().FindByPed(ped)) return;
-    int type = ped->PedType();
-    if (type != 4 && type != 5) return;  // PED_TYPE_CIVMALE, PED_TYPE_CIVFEMALE: the people of the street
-    int money = RandInt(5, 15) * 10;  // to the gang's bank, not the player's pocket
-    g_killFlash = money, g_killFlashMs = NowMs();
-    if (Net().IsHost()) {
-        if (HostRunning() && MyGang() < kGangs) HostState(MyGang()).bank += money;
-    } else {
-        Send(OP_KILL, [money](Writer& w) { w.U16((uint16_t)money); }, Net().HostId());
-    }
+// An attack is fought without the city's services: no crime is reported near it (CWanted::ReportCrimeNow asks
+// CGangWars::GangWarFightingGoingOn, as in the story's own wars: no police come), a wanted level there is cleared, and
+// no ambulance or fire engine is sent there (CCarCtrl::GenerateEmergencyServicesCar)
+constexpr float kCaptQuiet = 250.0f;
+bool NearCapt() {
+    if (!On() || !Started()) return false;
+    CPlayerPed* me = FindPlayerPed(0);
+    if (!me || me->AreaCode() != 0) return false;
+    for (int k = 0; k < kMaxCapts; ++k)
+        if (View(k).on && (me->GetPosition() - View(k).mid).Length2D() < kCaptQuiet) return true;
+    return false;
+}
+using BoolFn = bool(__cdecl*)();
+BoolFn g_origWarFought = nullptr;
+bool __cdecl HookWarFought() { return g_origWarFought() || NearCapt(); }
+VoidFn g_origEmergency = nullptr;
+void __cdecl HookEmergencyServices() {
+    if (NearCapt()) return;
+    g_origEmergency();
+}
+void QuietCapt() {
+    if (!NearCapt()) return;
+    void* wanted = Call<0x56E230, void*>(-1);  // FindPlayerWanted
+    if (wanted && Field<int32_t>(wanted, 0x2C) > 0) Cmd(0x0110).I(0).Run();  // CLEAR_WANTED_LEVEL
 }
 
 class GangWar : public Module {
@@ -1234,7 +1235,8 @@ public:
         SetHandler(&HandleFeature);
         mem::HookFn(0x446610, &HookGangWarsUpdate, &g_origWarsUpdate, "CGangWars::Update");
         mem::HookFn(0x572440, &HookFillZones, &g_origFill, "CTheZones::FillZonesWithGangColours");
-        mem::HookFn(0x43DCD0, &HookKillByPlayer, &g_origKill, "CDarkel::RegisterKillByPlayer");
+        mem::HookFn(0x443AC0, &HookWarFought, &g_origWarFought, "CGangWars::GangWarFightingGoingOn");
+        mem::HookFn(0x42F9C0, &HookEmergencyServices, &g_origEmergency, "CCarCtrl::GenerateEmergencyServicesCar");
     }
     void OnGameStarted() override {
         g_entered = false, g_wasDead = false, g_kitLevel = 0;
@@ -1263,6 +1265,7 @@ public:
         UpdateRuns();
         UpdateGuards();
         UpdateBaseDoors();
+        QuietCapt();
     }
     void OnPreProcess() override {
         if (On() && Started() && core::IsPlayerReady()) PlaceBaseMarkers();

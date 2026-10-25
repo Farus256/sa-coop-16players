@@ -15,7 +15,6 @@ enum : uint8_t {
     OP_BUY = 10, OP_EVENT = 11, OP_GIFT = 12, OP_CAPT = 13, OP_CONVOY = 14,
     OP_CAPT_RUN = 15,     // host -> the game that fights an attack: begin it there (or stop it)
     OP_CAPT_REPORT = 16,  // that game -> host: how it goes, how it ended
-    OP_KILL = 17,         // a game -> host: its player killed a passer-by (the money goes to the gang's bank)
     OP_GUARD = 18,        // host -> everyone: whose game keeps a base's guards
 };
 enum Item : uint8_t { IT_CAPT = 1, IT_ARMOUR, IT_BRIBE, IT_PRODUCTION, IT_QUALITY, IT_EMMET, kItems };

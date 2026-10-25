@@ -242,14 +242,14 @@ In the lobby each one clicks its gang: Grove Street Families, the Ballas, Los Sa
 (a gang can have several players, the first of them its leader). A gang nobody plays is left to the computer or
 left out (its territories are free then), as the host sets it in the lobby with the "Bot: ON / OFF" button on each
 gang's card. There the host also picks the win: every
-territory, a number of them, or the most of them when the time is up.
+territory, a number of them, or the most of them when the time is up. No police, ambulances or fire engines come to
+an attack: near one (250 m) no wanted level is given, and one already there goes.
 
 The players come in at their gang's base in its clothes (the leader as Sweet, Big Smoke, Ryder or Cesar) with its
 weapons, and come back there after every death or arrest, not at a hospital. Their own gang's people on the street
 respect them, the others hate them, and players of different gangs hurt each other. The territories are painted in
 their owners' colours on the map and the radar as in the story (one under attack flashes), and the whole map is known
-from the start. People and cars on the streets are rare, a passer-by killed pays the gang's bank $50 to $150, and
-there are no doors with yellow markers (barbers, clothes shops and the rest) and no weapons lying about the city. Each
+from the start. The streets have a little fewer people and cars than usual, and there are no doors with yellow markers (barbers, clothes shops and the rest) and no weapons lying about the city. Each
 base is guarded by 5-10 of the gang's men (more with its weapons' level), a dead guard replaced after 90 seconds, and
 has its own way into a house: a ring in the gang's colour at the nearest house's door (or at the base itself when no
 house stands near), for the gang's own players. Every gang makes $200 of
