@@ -512,6 +512,13 @@ void Renderer::Text(FontId f, float x, float y, std::string_view utf8, uint32_t 
     TextW(f, x, y, Widen(utf8), argb, flags);
 }
 
+std::string Renderer::Fit(FontId f, std::string_view utf8, float maxWidth) {
+    std::wstring w = Widen(utf8);
+    if (TextWidthW(f, w) <= maxWidth) return std::string(utf8);
+    while (!w.empty() && TextWidthW(f, w + L"...") > maxWidth) w.pop_back();
+    return Narrow(w + L"...");
+}
+
 std::vector<std::wstring> Renderer::Wrap(FontId fid, std::wstring_view text, float maxWidth) {
     std::vector<std::wstring> lines;
     std::wstring cur;

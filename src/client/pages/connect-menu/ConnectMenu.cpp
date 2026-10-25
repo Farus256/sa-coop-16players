@@ -213,8 +213,11 @@ void GangWindow(float x, float y, float W, float H) {
     float cx = x + 24 * s, cw = W - 48 * s, cy = y + 26 * s;
     g.Text(FONT_BIG, cx, cy, TR("Банда", "Gang"), w::kSaBlue, TEXT_SHADOW);
     cy += g.LineHeight(FONT_BIG) + 4 * s;
-    g.Text(FONT_SMALL, cx, cy, TR("Нажмите на банду, за которую будете играть", "Click the gang you will play"), w::kSaMuted, TEXT_SHADOW);
-    cy += g.LineHeight(FONT_SMALL) + 12 * s;
+    for (const std::wstring& l : g.Wrap(FONT_SMALL, Widen(TR("Нажмите на банду, за которую будете играть", "Click the gang you will play")), cw)) {
+        g.TextW(FONT_SMALL, cx, cy, l, w::kSaMuted, TEXT_SHADOW);
+        cy += g.LineHeight(FONT_SMALL);
+    }
+    cy += 12 * s;
     float lh = g.LineHeight(FONT_SMALL), rowH = g.LineHeight(FONT_MENU) + 12 * s;
     float rulesH = host ? rowH * 2 + 20 * s : lh * 2 + 10 * s;
     float areaH = y + H - 22 * s - rulesH - cy;
@@ -233,17 +236,27 @@ void GangWindow(float x, float y, float W, float H) {
             ty += g.LineHeight(FONT_NORMAL);
         }
         ty += 4 * s;
-        int players = 0;
+        int players = 0, unshown = 0;
+        float namesEnd = by + cardH - (lh + 10 * s) - 8 * s - lh - 4 * s;  // the names stop over the bot's switch
         auto who = [&](uint8_t id) {
             if (GangOf(id) != k) return;
+            ++players;
+            if (ty + lh * 2 > namesEnd) {  // no room for one more and the "and N more" line
+                ++unshown;
+                return;
+            }
             std::string n = id == Net().MyId() ? Cfg().nickname : Net().PeerName(id);
             if (Leader(id)) n += TR(" (лидер)", " (leader)");
-            g.Text(FONT_SMALL, bx + 8 * s, ty, n, 0xFFE0E0E0, TEXT_SHADOW);
+            g.Text(FONT_SMALL, bx + 8 * s, ty, g.Fit(FONT_SMALL, n, cardW - 16 * s), 0xFFE0E0E0, TEXT_SHADOW);
             ty += lh;
-            ++players;
         };
         who(Net().MyId());
         for (auto& [id, peer] : Net().Peers()) who(id);
+        if (unshown) {
+            g.Text(FONT_SMALL, bx + 8 * s, ty, g.Fit(FONT_SMALL, Format(TR("и ещё %d", "and %d more"), unshown), cardW - 16 * s), w::kSaMuted,
+                   TEXT_SHADOW);
+            ty += lh;
+        }
         // the gang's bot: a switch at the card's foot (the host's; the others see how it stands). It plays only a gang
         // nobody picked: with players in it the switch says so
         bool clickedToggle = false;
@@ -255,17 +268,17 @@ void GangWindow(float x, float y, float W, float H) {
             g.Rect(bxx, byy, bw, bh, over ? WithAlpha(col, 0.30f) : WithAlpha(col, 0.14f));
             g.RectOutline(bxx, byy, bw, bh, over ? 0xFFFFFFFF : col, std::max(1.0f, s));
             std::string label = std::string(TR("Бот: ", "Bot: ")) + (ai ? TR("ВКЛ", "ON") : TR("ВЫКЛ", "OFF"));
-            if (players) label += TR(" (играют люди)", " (players in it)");
-            else label += ai ? TR(" — играет компьютер", ": the computer plays it") : TR(" — банды нет в игре", ": left out");
-            g.Text(FONT_SMALL, bxx + bw * 0.5f, byy + 5 * s, label, players ? w::kSaMuted : 0xFFFFFFFF, TEXT_CENTER | TEXT_SHADOW);
+            g.Text(FONT_SMALL, bxx + bw * 0.5f, byy + 5 * s, g.Fit(FONT_SMALL, label, bw - 8 * s), players ? w::kSaMuted : 0xFFFFFFFF,
+                   TEXT_CENTER | TEXT_SHADOW);
+            // what it means, over the switch (unless the card's players fill it)
+            std::string what = players ? TR("играют люди", "players in it") : ai ? TR("играет компьютер", "the computer plays it")
+                                                                                : TR("банды нет в игре", "left out");
+            if (byy - lh - 2 * s > ty) g.Text(FONT_SMALL, bxx, byy - lh - 2 * s, g.Fit(FONT_SMALL, what, bw), w::kSaMuted, TEXT_SHADOW);
             if (over && st.lmbPressed) {
                 Rules().ai[k] = ai ? 0 : 1;
                 SendRoster();
                 clickedToggle = true;
             }
-            if (host && !players && hover && !over)
-                g.Text(FONT_SMALL, bxx, byy - lh - 2 * s, TR("Кнопка ниже — вкл/выкл бота", "The button below: the bot on/off"), w::kSaMuted,
-                       TEXT_SHADOW);
         }
         if (hover && st.lmbPressed && !clickedToggle && !lit) Pick((uint8_t)k);
     }
@@ -275,8 +288,8 @@ void GangWindow(float x, float y, float W, float H) {
                        : r.rule == WIN_COUNT ? Format(TR("Победа: %d районов", "Win: %d territories"), (int)r.count)
                                              : Format(TR("Победа: больше всех за %d мин", "Win: the most in %d min"), (int)r.minutes);
     if (!host) {
-        g.Text(FONT_SMALL, cx, cy, rule, 0xFFE0E0E0, TEXT_SHADOW);
-        g.Text(FONT_SMALL, cx, cy + lh, TR("Правила выбирает хост", "The host sets the rules"), w::kSaMuted, TEXT_SHADOW);
+        g.Text(FONT_SMALL, cx, cy, g.Fit(FONT_SMALL, rule, cw), 0xFFE0E0E0, TEXT_SHADOW);
+        g.Text(FONT_SMALL, cx, cy + lh, g.Fit(FONT_SMALL, TR("Правила выбирает хост", "The host sets the rules"), cw), w::kSaMuted, TEXT_SHADOW);
         return;
     }
     if (int d = w::Selector("gwrule", cx, cy, cw, rowH, rule)) {

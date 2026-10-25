@@ -59,6 +59,8 @@ public:
     float LineHeight(FontId f) const { return m_fonts[f].lineHeight; }
     // Splits text into lines not wider than maxWidth (colour codes are kept).
     std::vector<std::wstring> Wrap(FontId f, std::wstring_view text, float maxWidth);
+    // The text as it fits in maxWidth: whole, or cut with "..." at its end
+    std::string Fit(FontId f, std::string_view utf8, float maxWidth);
     // Text in one of the game's fonts, drawn by the game (CFont), black outline. ASCII only: the glyphs above it
     // differ between translations. height = character cell height in pixels.
     void GameText(GameFont font, float x, float y, std::string_view ascii, float height, uint32_t argb, uint32_t flags = 0);

@@ -84,10 +84,12 @@ static bool MenuItem(float x, float y, float w, float h, FontId font, const std:
     auto& g = Gfx();
     bool hover = enabled && Hover(x, y, w, h);
     bool lit = enabled && (selected || hover);
-    float tw = g.TextWidth(font, label), lh = g.LineHeight(font);
+    float lh = g.LineHeight(font);
+    std::string text = g.Fit(font, label, std::max(lh, w - (pointerOnHover ? lh * 2.0f : 0.0f)));  // within its box, the pointer beside it
+    float tw = g.TextWidth(font, text);
     float tx = x + (w - tw) * 0.5f, ty = y + (h - lh) * 0.5f;
     if (enabled && (selected || (hover && pointerOnHover))) Pointer(tx - lh * 0.95f, y + h * 0.5f, lh * 1.7f, kSaBlue);
-    g.Text(font, tx, ty, label, !enabled ? 0xFF353F4A : lit ? kSaBlue : kSaSlate, TEXT_SHADOW);
+    g.Text(font, tx, ty, text, !enabled ? 0xFF353F4A : lit ? kSaBlue : kSaSlate, TEXT_SHADOW);
     return hover && In().State().lmbPressed;
 }
 
@@ -230,7 +232,7 @@ int Selector(const char* id, float x, float y, float w, float h, const std::stri
     if (arrow(x, "<")) r = -1;
     if (arrow(x + w - bw, ">")) r = +1;
     float ty = y + (h - g.LineHeight(FONT_NORMAL)) * 0.5f;
-    g.Text(FONT_NORMAL, x + w * 0.5f, ty, text, 0xFFFFFFFF, TEXT_CENTER | TEXT_SHADOW);
+    g.Text(FONT_NORMAL, x + w * 0.5f, ty, g.Fit(FONT_NORMAL, text, std::max(bw, w - 2 * bw - 6 * s)), 0xFFFFFFFF, TEXT_CENTER | TEXT_SHADOW);
     return r;
 }
 
