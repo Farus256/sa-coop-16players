@@ -233,6 +233,7 @@ enum MsgId : uint8_t {
                               // partner's own look: u8 n, n x (u8 key index 0..27 of CPedClothesDesc, u32 key); 0: off
     G_GANG = 188,             // reliable: the gang war mode: u8 op and its data (the lobby's picks and settings, the gangs'
                               // state, a purchase, an event of the war; GangMode.h)
+    G_MONEY = 189,            // reliable, to one player: u8 op (1 a payment, 2 taken, 3 refused), u32 id, i32 amount (/pay)
     G_OBJ_HOLD = 187,         // reliable: the partner holds the copy of a host's mission object: u8 op (1 hold, 2 release,
                               // 3 enter pressed, 4 deny: host -> partner), u16 object, release: vec3 pos, quat rot
 
