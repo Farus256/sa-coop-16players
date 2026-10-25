@@ -201,6 +201,8 @@ enum MsgId : uint8_t {
                               // u8 player, 255 the host; 4 over), reliable; 5 its sprites to the one who plays it (u8 n,
                               // {u8 slot, str name}), reliable; 6 this frame's drawing (u8 n, {u8 type, u8 before fade,
                               // i16 sprite, 4 f32 corners in screen fractions, f32 angle, u32 colour}), unreliable
+    G_RACE = 174,             // reliable, host -> partners: u8 op (1 a race of the host's mission started: u16 the host's car
+                              // model; 2 it is over)
 
     G_VOICE = 200,            // unreliable: voice frame
     G_LAST = 255,
