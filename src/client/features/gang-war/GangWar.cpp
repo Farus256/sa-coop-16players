@@ -270,6 +270,8 @@ uint8_t g_kitLevel = 0;       // the weapons it was given
 bool g_wasDead = false;
 uint64_t g_lookMs = 0, g_densityMs = 0, g_emmetAskMs = 0;
 bool g_specialsLoaded = false;
+bool g_prologueGone = false;  // the new game's "intro" ended (or never came)
+uint64_t g_gameStartMs = 0;
 bool g_menu = false;
 uint64_t g_landUntil = 0;  // just put at the base: kept from falling through ground not loaded yet
 uint64_t g_landLast = 0;   // ... 20 s at most
@@ -283,6 +285,26 @@ void EndPrologue() {
         if (Field<uint8_t>(s, 0xDC) && !_strnicmp((const char*)s + 0x08, "intro", 8)) found = true;  // m_bIsMission, m_szName
     if (!found) return;
     Cmd(0x0459).S8("intro").Run();  // TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME
+    // Its people go with it: Tenpenny, Pulaski and Hernandez stood in the special characters' slots (290-292), and the
+    // leaders' models put there over them while they lived broke the game (black, then gone, with two leaders)
+    int removed = 0;
+    CPoolHeader* pool = PedPool();
+    for (int i = 0; pool && i < pool->size; ++i) {
+        if (pool->byteMap[i] < 0) continue;
+        auto* p = (CPed*)(pool->objects + (size_t)i * kPedPoolElemSize);
+        if (p->IsPlayer() || p->CreatedBy() != 2 /* PED_MISSION */ || Players::Instance().FindByPed(p) || Peds::Instance().Find(p)) continue;
+        Cmd(0x009B).I(GetPedRef(p)).Run();  // DELETE_CHAR
+        ++removed;
+    }
+    for (int slot = 1; slot <= 4; ++slot) {  // UNLOAD_SPECIAL_CHARACTER: the leaders' slots free for ours (none in use)
+        bool used = false;
+        for (int i = 0; pool && i < pool->size && !used; ++i)
+            used = pool->byteMap[i] >= 0 && ((CPed*)(pool->objects + (size_t)i * kPedPoolElemSize))->ModelIndex() == 289 + slot;
+        if (!used) Cmd(0x0296).I(slot).Run();
+    }
+    g_specialsLoaded = false;
+    g_prologueGone = true;
+    LOGI("Gang war: the prologue's %d people removed, the special slots freed", removed);
     Ref<int32_t>(0xA49960 + (uintptr_t)Ref<int32_t>(0xA476AC)) = 0;  // the script's ONMISSION (CTheScripts::OnAMissionFlag)
     Cmd(0x01B4).I(0).I(1).Run();       // SET_PLAYER_CONTROL
     Cmd(0x02A3).I(0).Run();            // SWITCH_WIDESCREEN off
@@ -316,11 +338,16 @@ void LoadSpecials() {
     void* dir = Ref<void*>(0x8E48D0);  // CStreaming::ms_pExtraObjectsDir
     for (int g = 0; g < kGangs; ++g) {
         std::string name = ToLower(Info(g).leader);
-        if (!dir || !CallMethod<0x532450, void*>(dir, name.c_str())) continue;  // CDirectory::FindItem
+        if (!dir || !CallMethod<0x532450, void*>(dir, name.c_str())) {  // CDirectory::FindItem
+            LOGW("Gang war: no %s in the game's archives", name.c_str());
+            continue;
+        }
         Call<0x409D10>((int)Info(g).leaderModel, name.c_str(), 2);  // CStreaming::RequestSpecialModel (required)
+        LOGI("Gang war: %s asked for in slot %d", name.c_str(), (int)Info(g).leaderModel);
     }
     LoadAllRequestedModels(false);
     g_specialsLoaded = true;
+    for (int g = 0; g < kGangs; ++g) LOGI("Gang war: slot %d %s", (int)Info(g).leaderModel, IsModelLoaded(Info(g).leaderModel) ? "loaded" : "not loaded");
 }
 
 uint16_t ModelFor(uint8_t player) {
@@ -369,9 +396,13 @@ void EnterWar() {
     CPlayerPed* me = FindPlayerPed(0);
     uint8_t gang = MyGang();
     if (!me || gang >= kGangs) return;
+    // each step in the log: a game that ended on the way says where (two players, two leaders, it closed unseen)
+    LOGI("Gang war: coming into the war for %s: the leaders' models", Info(gang).name[1]);
     LoadSpecials();
+    LOGI("Gang war: the gangs' ways, then to the base");
     Relations(gang);
     Teleport(0, gangmode::BaseSpot(Net().MyId()), Rand(0.0f, 360.0f));
+    LOGI("Gang war: at the base, the gang's look");
     Wear();
     GiveKit();
     me->Health() = std::max(me->Health(), 100.0f);
@@ -503,7 +534,9 @@ void UpdatePlayer() {
     if (gang >= kGangs) return;
     uint64_t now = NowMs();
     if (!g_entered) {
-        if (me->Health() > 0.0f && !GetPad(0)->DisablePlayerControls) EnterWar();
+        // not before the prologue is gone (its people hold the special slots the leaders take): or 12 s with none
+        bool clear = g_prologueGone || now - g_gameStartMs > 12000;
+        if (clear && me->Health() > 0.0f && !GetPad(0)->DisablePlayerControls) EnterWar();
         return;
     }
     // back at the base after a death (the game's hospital first)
@@ -1308,6 +1341,7 @@ public:
     void OnGameStarted() override {
         g_entered = false, g_wasDead = false, g_kitLevel = 0;
         g_specialsLoaded = false;
+        g_prologueGone = false, g_gameStartMs = NowMs();
         g_armoured.clear();
         ResetBase();  // a new world: its doors and people anew
     }

@@ -374,6 +374,10 @@ void __cdecl HookConstructPedModel(uint32_t model, void* clothes, const void* ol
     g_origConstructPedModel(model, clothes, old, cutscene);
 }
 
+using ReplayFn = void(__cdecl*)();
+ReplayFn g_origReplayUpdate = nullptr;
+void __cdecl HookReplayUpdate() {}
+
 void InstallGrabScreenFix() {
     static const uint8_t was[] = {0xFF, 0x15, 0xF0, 0x82, 0x85, 0x00};  // call [__imp_GetWindowRect]
     if (!mem::Check(0x74530B, was, sizeof was)) return LOGW("Screen grab fix skipped: unexpected bytes at 0x74530B");
@@ -808,6 +812,10 @@ void Apply() {
         mem::RedirectCallFn(0x748D9B, &HookIdleEvent, &g_origIdleEvent);    // WinMain -> RsEventHandler(rsIDLE)
         mem::HookFn(0x507430, &HookPauseAllSounds, &g_origPauseAllSounds, "CAudioEngine::PauseAllSounds");
     }
+    // The replay (F1 plays the last seconds back, F2/F3 save and play one from disk): its playback rebuilds every ped of
+    // the recording, a copy of another game's or a special character too, and crashed in CReplay::RestoreClothesDesc
+    // (0x45C7D4, a ped whose clothes it never had). Neither recorded nor played back.
+    mem::HookFn(0x460500, &HookReplayUpdate, &g_origReplayUpdate, "CReplay::Update");
     mem::HookFn(0x57C520, &HookCentreMousePointer, &g_origCentreMouse, "CMenuManager::CentreMousePointer");
     mem::RedirectCallFn(0x53E9F1, &HookIdleMouseSetPos, &g_origIdleMouseSetPos);  // Idle -> RsMouseSetPos
     mem::HookFn(0x53F3C0, &HookUpdateMouse, &g_origUpdateMouse, "CPad::UpdateMouse");

@@ -4,7 +4,10 @@
 #include <psapi.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
+#include <exception>
 
 #include "common/config/version/Version.h"
 #include "common/lib/log/Log.h"
@@ -109,6 +112,8 @@ LONG WINAPI VectoredHandler(EXCEPTION_POINTERS* ep) {
     // the game's and ours only: drivers and plugins take and handle their own (IsBadReadPtr), the reports ran out on them
     uintptr_t at = (uintptr_t)ep->ExceptionRecord->ExceptionAddress;
     bool ours = (at >= g_exeBase && at < g_exeEnd) || (at >= g_selfBase && at < g_selfEnd);
+    // a stack overflow anywhere: the process dies right after it, its unhandled filter seldom gets to run
+    if (code == EXCEPTION_STACK_OVERFLOW) WriteReport(ep, true);
     if (ours && (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
                  code == EXCEPTION_INT_DIVIDE_BY_ZERO || code == EXCEPTION_PRIV_INSTRUCTION || code == STATUS_HEAP_CORRUPTION)) {
         WriteReport(ep, true);
@@ -215,6 +220,34 @@ void StartHangDetector(unsigned seconds) {
     CreateThread(nullptr, 0, HangThread, nullptr, 0, nullptr);
 }
 
+// The C runtime's own ends (abort, a bad argument to its functions, std::terminate, a pure virtual call) close the
+// process without an exception: the game was just gone, nothing in crash.log. Each is written down first.
+static void WriteRuntimeEnd(const char* what) {
+    if (FILE* f = _wfopen(g_crashPath.c_str(), L"ab")) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        void* frames[32] = {};
+        USHORT n = RtlCaptureStackBackTrace(0, 32, frames, nullptr);
+        fprintf(f, "\r\n==== %s %s - %02d:%02d:%02d - %s ====\r\n", COOP_NAME, COOP_VERSION_STR, st.wHour, st.wMinute, st.wSecond, what);
+        for (USHORT i = 0; i < n; ++i) {
+            char d[160];
+            DescribeAddress((uintptr_t)frames[i], d, sizeof(d));
+            fprintf(f, "  %s\r\n", d);
+        }
+        fclose(f);
+    }
+    LOGE("The C runtime ended the game: %s - see crash.log", what);
+}
+static void __cdecl OnInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {
+    WriteRuntimeEnd("C runtime: invalid parameter");
+}
+static void __cdecl OnPureCall() { WriteRuntimeEnd("pure virtual call"); }
+static void OnTerminate() {
+    WriteRuntimeEnd("std::terminate");
+    abort();
+}
+static void __cdecl OnAbort(int) { WriteRuntimeEnd("abort"); }
+
 void InstallCrashHandler(const std::wstring& coopDir) {
     g_crashPath = coopDir + L"crash.log";
     ModuleRange(GetModuleHandleW(nullptr), g_exeBase, g_exeEnd);
@@ -224,6 +257,10 @@ void InstallCrashHandler(const std::wstring& coopDir) {
     ModuleRange(self, g_selfBase, g_selfEnd);
     AddVectoredExceptionHandler(0, VectoredHandler);
     g_prevFilter = SetUnhandledExceptionFilter(UnhandledFilter);
+    _set_invalid_parameter_handler(OnInvalidParameter);
+    _set_purecall_handler(OnPureCall);
+    std::set_terminate(OnTerminate);
+    signal(SIGABRT, OnAbort);
 }
 
 void ReclaimCrashFilter() {
