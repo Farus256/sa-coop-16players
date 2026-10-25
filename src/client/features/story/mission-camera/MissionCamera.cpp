@@ -102,9 +102,9 @@ void __fastcall HookEntity(void* cam, void* edx, CEntity* target, int mode, int 
 
 using VoidFn = void(__fastcall*)(void*, void*);
 VoidFn g_origRestore = nullptr, g_origRestoreCut = nullptr;
-void Let(void* by);
-void SendRestore(bool cut, void* by) {
-    Let(by);  // partner: this game's camera is given back (a cutscene's end), the host's scene holds it no more
+void Let();
+void SendRestore(bool cut) {
+    Let();  // partner: this game's camera is given back (a cutscene's end), the host's scene holds it no more
     if (!Ours()) return;
     Writer w(proto::G_SCRIPT_CAM);
     w.U8(OP_RESTORE);
@@ -113,11 +113,11 @@ void SendRestore(bool cut, void* by) {
 }
 void __fastcall HookRestore(void* cam, void* edx) {
     g_origRestore(cam, edx);
-    SendRestore(false, __builtin_return_address(0));
+    SendRestore(false);
 }
 void __fastcall HookRestoreCut(void* cam, void* edx) {
     g_origRestoreCut(cam, edx);
-    SendRestore(true, __builtin_return_address(0));
+    SendRestore(true);
 }
 
 using LinearFn = void(__fastcall*)(void*, void*, CVector*, CVector*, float, bool);
@@ -166,11 +166,11 @@ void Hold(bool on) {
 }
 
 // the scene is over here without a word of the camera: the controls come back, the camera is as it is
-void Let(void* by) {
+void Let() {
     if (!g_active || Net().IsHost()) return;
     g_active = false;
     Hold(false);
-    LOGI("Host's scene: our camera was given back here (by %p), our control too", by);
+    LOGI("Host's scene: our camera was given back here, our control too");
 }
 
 // the host sits in a car whose seats are all taken (by the mission's people) and we are not in it: no place for us in
@@ -260,7 +260,7 @@ void HandleCam(uint8_t from, Reader& r) {
     if (from != Net().HostId() || Net().IsHost()) return;
     uint8_t op = r.U8();
     if (!core::IsPlayerReady() || Ref<uint8_t>(0xB5F851)) {  // a cutscene: its end gives the camera back itself
-        if (op == OP_RESTORE) Let(nullptr);
+        if (op == OP_RESTORE) Let();
         return;
     }
     switch (op) {
