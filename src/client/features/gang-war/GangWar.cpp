@@ -392,6 +392,8 @@ void Relations(uint8_t mine) {
     }
 }
 
+void MaxRespect();
+
 void EnterWar() {
     CPlayerPed* me = FindPlayerPed(0);
     uint8_t gang = MyGang();
@@ -402,6 +404,7 @@ void EnterWar() {
     LOGI("Gang war: the gangs' ways, then to the base");
     Relations(gang);
     Teleport(0, gangmode::BaseSpot(Net().MyId()), Rand(0.0f, 360.0f));
+    MaxRespect();
     LOGI("Gang war: at the base, the gang's look");
     Wear();
     GiveKit();
@@ -462,7 +465,15 @@ void ArmourGangMen() {
     g_armoured.swap(now);
 }
 
+// Respect: the most for every player in the war (a whole group of homies, the street's people's respect); kept so,
+// the game reckons it anew from its parts now and then (CStats::UpdateRespectStat)
+void MaxRespect() {
+    for (int stat : {64 /* STAT_TOTAL_RESPECT */, 68 /* STAT_RESPECT */})
+        if (Call<0x558E40, float>((uint16_t)stat) < 1000.0f) Call<0x55A070>((uint16_t)stat, 1000.0f);  // CStats::GetStatValue, SetStatValue
+}
+
 void KeepWorld() {
+    MaxRespect();
     // the next restart (a death, an arrest) at the base: the game loads the scene there before it puts the player in
     if (MyGang() < kGangs) {
         CVector b = gangmode::BaseSpot(Net().MyId());
