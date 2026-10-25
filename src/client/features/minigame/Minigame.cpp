@@ -49,6 +49,10 @@ constexpr uintptr_t kRects = 0xA92D68, kRectCount = 0xA44B5C;  // ..., CTheScrip
 constexpr int kRectSize = 0x3C, kMaxRects = 128, kMaxSent = 40;
 constexpr uintptr_t kSprites = 0xA94B68;  // CTheScripts::ScriptSprites: CSprite2d (RwTexture*) each; LOAD_SPRITE n is [n-1]
 constexpr int kMaxSprites = 128;
+// CTheScripts::UseTextCommands: CTheScripts::Process empties the list only while it is set (1: this once, 2: on). A
+// script's drawing sets it; nothing here draws during the contest, so the arrows of every frame stayed in the list and
+// the partner saw a smear of them until the 128 places were full.
+constexpr uintptr_t kUseTextCommands = 0xA44B67;
 
 struct Rect {
     uint8_t type = 0, beforeFade = 0;
@@ -239,6 +243,7 @@ void StopPlaying() {
     if (g_txdLoaded) Cmd(0x0391).Run();  // REMOVE_TEXTURE_DICTIONARY: the sprites go with it
     g_txdLoaded = g_playing = false;
     g_rects.clear();
+    if (!Ref<uint8_t>(kUseTextCommands)) Ref<uint8_t>(kUseTextCommands) = 1;  // what was drawn last goes next frame
 }
 
 void LoadSprites(Reader& r) {
@@ -274,6 +279,7 @@ void ReadFrame(Reader& r) {
 // after this game's scripts filled this frame's list: the host's contest's drawing goes in after it
 void DrawFrame() {
     if (g_rects.empty() || NowMs() - g_rectsMs > 500) return;
+    if (!Ref<uint8_t>(kUseTextCommands)) Ref<uint8_t>(kUseTextCommands) = 1;  // this frame's goes next frame
     uint16_t& count = Ref<uint16_t>(kRectCount);
     float sw = (float)ScreenWidth(), sh = (float)ScreenHeight();
     for (const Rect& x : g_rects) {
