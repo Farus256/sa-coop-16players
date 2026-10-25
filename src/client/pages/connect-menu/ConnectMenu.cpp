@@ -7,7 +7,6 @@
 
 #include "common/config/version/Version.h"
 #include "common/lib/util/Util.h"
-#include "entities/gang-mode/GangMode.h"
 #include "entities/session/Flow.h"
 #include "features/progress/SkinChoice.h"
 #include "features/progress/SkinPictures.h"
@@ -200,115 +199,6 @@ void CharacterWindow(float x, float y, float W, float H) {
     if (step) skin::SetChoice((index + step + count) % count);
 }
 
-// Beside the lobby in the gang war: the four gangs, each with who plays it; a click on one plays it. A gang nobody plays
-// is the computer's or left out: the host switches that on its card. Under them the host's rule of the win.
-void GangWindow(float x, float y, float W, float H) {
-    using namespace gangmode;
-    auto& g = Gfx();
-    auto& st = In().State();
-    float s = g.Scale();
-    bool host = Net().IsHost();
-    g.Rect(x, y, W, H, 0xF0000000);
-    g.RectOutline(x, y, W, H, w::kSaLine, std::max(1.0f, s));
-    float cx = x + 24 * s, cw = W - 48 * s, cy = y + 26 * s;
-    g.Text(FONT_BIG, cx, cy, TR("Банда", "Gang"), w::kSaBlue, TEXT_SHADOW);
-    cy += g.LineHeight(FONT_BIG) + 4 * s;
-    for (const std::wstring& l : g.Wrap(FONT_SMALL, Widen(TR("Нажмите на банду, за которую будете играть", "Click the gang you will play")), cw)) {
-        g.TextW(FONT_SMALL, cx, cy, l, w::kSaMuted, TEXT_SHADOW);
-        cy += g.LineHeight(FONT_SMALL);
-    }
-    cy += 12 * s;
-    float lh = g.LineHeight(FONT_SMALL), rowH = g.LineHeight(FONT_MENU) + 12 * s;
-    float rulesH = host ? rowH * 2 + 20 * s : lh * 2 + 10 * s;
-    float areaH = y + H - 22 * s - rulesH - cy;
-    float gap = 10 * s, cardW = (cw - gap) / 2, cardH = (areaH - gap) / 2;
-    uint8_t mine = MyGang();
-    for (int k = 0; k < kGangs; ++k) {
-        const GangInfo& gi = Info(k);
-        float bx = cx + (k % 2) * (cardW + gap), by = cy + (k / 2) * (cardH + gap);
-        bool hover = st.mouseX >= bx && st.mouseX < bx + cardW && st.mouseY >= by && st.mouseY < by + cardH;
-        bool lit = k == mine;
-        g.Rect(bx, by, cardW, cardH, lit ? WithAlpha(gi.argb, 0.22f) : 0xFF0B0E12);
-        g.RectOutline(bx, by, cardW, cardH, lit ? gi.argb : hover ? 0xFF6A7A8B : w::kSaLine, std::max(1.0f, (lit ? 2.0f : 1.0f) * s));
-        float ty = by + 8 * s;
-        for (const std::wstring& line : g.Wrap(FONT_NORMAL, Widen(Name(k)), cardW - 16 * s)) {
-            g.TextW(FONT_NORMAL, bx + 8 * s, ty, line, gi.argb, TEXT_SHADOW);
-            ty += g.LineHeight(FONT_NORMAL);
-        }
-        ty += 4 * s;
-        int players = 0, unshown = 0;
-        float namesEnd = by + cardH - (lh + 10 * s) - 8 * s - lh - 4 * s;  // the names stop over the bot's switch
-        auto who = [&](uint8_t id) {
-            if (GangOf(id) != k) return;
-            ++players;
-            if (ty + lh * 2 > namesEnd) {  // no room for one more and the "and N more" line
-                ++unshown;
-                return;
-            }
-            std::string n = id == Net().MyId() ? Cfg().nickname : Net().PeerName(id);
-            if (Leader(id)) n += TR(" (лидер)", " (leader)");
-            g.Text(FONT_SMALL, bx + 8 * s, ty, g.Fit(FONT_SMALL, n, cardW - 16 * s), 0xFFE0E0E0, TEXT_SHADOW);
-            ty += lh;
-        };
-        who(Net().MyId());
-        for (auto& [id, peer] : Net().Peers()) who(id);
-        if (unshown) {
-            g.Text(FONT_SMALL, bx + 8 * s, ty, g.Fit(FONT_SMALL, Format(TR("и ещё %d", "and %d more"), unshown), cardW - 16 * s), w::kSaMuted,
-                   TEXT_SHADOW);
-            ty += lh;
-        }
-        // the gang's bot: a switch at the card's foot (the host's; the others see how it stands). It plays only a gang
-        // nobody picked: with players in it the switch says so
-        bool clickedToggle = false;
-        {
-            bool ai = Rules().ai[k] != 0;
-            float bh = lh + 10 * s, bw = cardW - 16 * s, bxx = bx + 8 * s, byy = by + cardH - bh - 8 * s;
-            bool over = host && st.mouseX >= bxx && st.mouseX < bxx + bw && st.mouseY >= byy && st.mouseY < byy + bh;
-            uint32_t col = players ? w::kSaMuted : ai ? 0xFF4FD06A : 0xFFE05050;
-            g.Rect(bxx, byy, bw, bh, over ? WithAlpha(col, 0.30f) : WithAlpha(col, 0.14f));
-            g.RectOutline(bxx, byy, bw, bh, over ? 0xFFFFFFFF : col, std::max(1.0f, s));
-            std::string label = std::string(TR("Бот: ", "Bot: ")) + (ai ? TR("ВКЛ", "ON") : TR("ВЫКЛ", "OFF"));
-            g.Text(FONT_SMALL, bxx + bw * 0.5f, byy + 5 * s, g.Fit(FONT_SMALL, label, bw - 8 * s), players ? w::kSaMuted : 0xFFFFFFFF,
-                   TEXT_CENTER | TEXT_SHADOW);
-            // what it means, over the switch (unless the card's players fill it)
-            std::string what = players ? TR("играют люди", "players in it") : ai ? TR("играет компьютер", "the computer plays it")
-                                                                                : TR("банды нет в игре", "left out");
-            if (byy - lh - 2 * s > ty) g.Text(FONT_SMALL, bxx, byy - lh - 2 * s, g.Fit(FONT_SMALL, what, bw), w::kSaMuted, TEXT_SHADOW);
-            if (over && st.lmbPressed) {
-                Rules().ai[k] = ai ? 0 : 1;
-                SendRoster();
-                clickedToggle = true;
-            }
-        }
-        if (hover && st.lmbPressed && !clickedToggle && !lit) Pick((uint8_t)k);
-    }
-    cy += areaH + 10 * s;
-    Settings& r = Rules();
-    std::string rule = r.rule == WIN_ALL     ? std::string(TR("Победа: все районы", "Win: every territory"))
-                       : r.rule == WIN_COUNT ? Format(TR("Победа: %d районов", "Win: %d territories"), (int)r.count)
-                                             : Format(TR("Победа: больше всех за %d мин", "Win: the most in %d min"), (int)r.minutes);
-    if (!host) {
-        g.Text(FONT_SMALL, cx, cy, g.Fit(FONT_SMALL, rule, cw), 0xFFE0E0E0, TEXT_SHADOW);
-        g.Text(FONT_SMALL, cx, cy + lh, g.Fit(FONT_SMALL, TR("Правила выбирает хост", "The host sets the rules"), cw), w::kSaMuted, TEXT_SHADOW);
-        return;
-    }
-    if (int d = w::Selector("gwrule", cx, cy, cw, rowH, rule)) {
-        r.rule = (uint8_t)((r.rule + d + 3) % 3);
-        SendRoster();
-    }
-    cy += rowH + 8 * s;
-    if (r.rule == WIN_COUNT) {
-        if (int d = w::Selector("gwcount", cx, cy, cw, rowH, Format(TR("Районов для победы: %d", "Territories to win: %d"), (int)r.count))) {
-            r.count = (uint8_t)std::clamp((int)r.count + d * 5, 5, 120);
-            SendRoster();
-        }
-    } else if (r.rule == WIN_TIME) {
-        if (int d = w::Selector("gwtime", cx, cy, cw, rowH, Format(TR("Время: %d мин", "Time: %d min"), (int)r.minutes))) {
-            r.minutes = (uint8_t)std::clamp((int)r.minutes + d * 5, 10, 180);
-            SendRoster();
-        }
-    }
-}
 
 void LoadFields() {
     auto& cfg = Cfg();
@@ -595,28 +485,16 @@ void RenderConnectMenu() {
                 if (!clip.empty()) g_addr = clip.substr(0, 64);
             }
         } else {
-            // the mode (the story, or the gang war: a new game for everyone) and, for the story, the save
-            float mw = inGame ? 0.0f : cw * 0.46f, gap = inGame ? 0.0f : 14 * s;
-            if (!inGame) caption(cx, TR("Режим", "Mode"));
-            caption(cx + mw + gap, TR("Сохранение", "Save"));
+            caption(cx, TR("Сохранение", "Save"));
             cy += ch + 6 * s;
-            int& mode = Cfg().gameMode;
-            if (!inGame) {
-                int d = w::Selector("mode", cx, cy, mw, rowH, mode == 1 ? TR("Война банд: ЛС", "Gang war: LS") : TR("Сюжет", "The story"));
-                if (d) mode = 1 - mode;
-            }
-            float sx = cx + mw + gap, sw = cw - mw - gap;
-            if (inGame || mode == 1) {
-                g.Rect(sx, cy, sw, rowH, 0xFF090C10);
-                g.Text(FONT_NORMAL, sx + 12 * s, cy + (rowH - lh) * 0.5f,
-                       inGame ? TR("Текущая игра", "Current game") : TR("Новая игра для всех", "A new game for all"), kText, TEXT_SHADOW);
-                if (!inGame) hostSlot = -1;
+            if (inGame) {
+                g.Rect(cx, cy, cw, rowH, 0xFF090C10);
+                g.Text(FONT_NORMAL, cx + 12 * s, cy + (rowH - lh) * 0.5f, TR("Текущая игра", "Current game"), kText, TEXT_SHADOW);
             } else {
-                int d = w::Selector("slot", sx, cy, sw, rowH, g_slots[g_slotIndex].title);
+                int d = w::Selector("slot", cx, cy, cw, rowH, g_slots[g_slotIndex].title);
                 if (d) g_slotIndex = (g_slotIndex + d + (int)g_slots.size()) % (int)g_slots.size();
                 if (g_slots[g_slotIndex].exists) hostSlot = g_slots[g_slotIndex].slot;
             }
-            if (inGame) mode = 0;  // hosted from inside a game: the story goes on
         }
         cy += rowH + 14 * s;
 
@@ -657,10 +535,6 @@ void RenderConnectMenu() {
                  kSaMuted, FONT_SMALL, true);
         else if (g_tab == 1 && !inGame && !hostSlot)
             para(TR("В этом слоте нет сохранения.", "This slot has no save."), kSaMuted, FONT_SMALL, true);
-        else if (g_tab == 1 && !inGame && Cfg().gameMode == 1)
-            para(TR("Все начнут новую игру без сюжета и пролога. Банду каждый выберет в лобби.",
-                    "Everyone starts a new game with no story and no prologue. Each picks a gang in the lobby."),
-                 kSaMuted, FONT_SMALL, true);
         else if (g_tab == 1 && !inGame && hostSlot < 0)
             para(TR("Пролог вы пройдёте сами, а друг появится рядом, когда CJ сядет на велосипед.",
                     "You play the prologue alone, and your friend appears next to you when CJ gets on the bike."),
@@ -680,8 +554,7 @@ void RenderConnectMenu() {
               "{ACCBF1}F9{8D9CAD}  window     {ACCBF1}T{8D9CAD}  chat     {ACCBF1}B{8D9CAD}  voice     "
               "{ACCBF1}G{8D9CAD}  passenger     {ACCBF1}F2{8D9CAD}  players"),
            kSaMuted, TEXT_SHADOW);
-    if (picker && gangmode::On()) GangWindow(x + W + pickGap, y, pickW, pickH);
-    else if (picker) CharacterWindow(x + W + pickGap, y, pickW, pickH);
+    if (picker) CharacterWindow(x + W + pickGap, y, pickW, pickH);
     w::EndFrame();
     w::DrawCursor();
     // Esc closes even when a text box is focused (handled in OnKeyDown)

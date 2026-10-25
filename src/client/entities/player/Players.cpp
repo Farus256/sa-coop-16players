@@ -11,7 +11,6 @@
 #include "common/api/protocol/Protocol.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
-#include "entities/gang-mode/GangMode.h"
 #include "entities/mission/Mission.h"
 #include "entities/ped/Peds.h"
 #include "entities/session/Flow.h"
@@ -330,17 +329,6 @@ bool __cdecl HookQuitCarEnter(CPed* ped, CVehicle* v, int32_t start, void* task)
 using RestoreFn = void(__cdecl*)(CPlayerPed*, CVector, float);
 RestoreFn g_origRestore = nullptr;
 void __cdecl HookRestorePlayer(CPlayerPed* player, CVector pos, float heading) {
-    // The gang war: back at the gang's base after every death or arrest, never at a hospital or a police station
-    if (gangmode::Started() && player == FindPlayerPed(0) && gangmode::MyGang() < gangmode::kGangs) {
-        CVector base = gangmode::BaseSpot(Net().MyId());
-        if (base.x || base.y) {
-            pos = base;
-            heading = (float)(NowMs() % 360);
-            LOGI("Respawn at the gang's base");
-            g_origRestore(player, pos, heading);
-            return;
-        }
-    }
     // Killed or busted in the host's mission (its enemies go for every PLAYER1): back by the host, not at a hospital
     // across the map while the mission goes on. Only one who died near the host: where it was is still its place now.
     if (Net().Online() && !Net().IsHost() && player == FindPlayerPed(0) && HostMissionRecent(0))

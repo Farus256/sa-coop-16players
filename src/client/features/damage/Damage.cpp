@@ -26,7 +26,6 @@
 #include "common/api/protocol/Protocol.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
-#include "entities/gang-mode/GangMode.h"
 #include "entities/ped/Peds.h"
 #include "entities/player/Players.h"
 #include "entities/vehicle/Vehicles.h"
@@ -128,14 +127,9 @@ bool IsRemotePlayerEntity(CEntity* e) {
     return ped && Players::Instance().FindByPed(ped);
 }
 
-// Friendly fire, or (the gang war) a player of another gang: the other player's hits count
-bool PlayerHurts(CEntity* e) {
-    if (Net().FriendlyFire()) return true;
-    CPed* ped = e ? (e->IsPed() ? (CPed*)e : DriverOf(e)) : nullptr;
-    RemotePlayer* rp = ped ? Players::Instance().FindByPed(ped) : nullptr;
-    return rp && gangmode::Enemies(Net().MyId(), rp->id);
-}
-bool PlayerHurts(uint8_t id) { return Net().FriendlyFire() || gangmode::Enemies(Net().MyId(), id); }
+// Friendly fire: the other player's hits count
+bool PlayerHurts(CEntity*) { return Net().FriendlyFire(); }
+bool PlayerHurts(uint8_t) { return Net().FriendlyFire(); }
 
 // the other player, its car, or a car or ped its game owns (a copy here)
 bool FromOtherSide(CEntity* e) {

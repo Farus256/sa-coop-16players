@@ -406,13 +406,13 @@ void Server::HandleCommand(Player* p, const std::string& text) {
               "Commands: /players, /pm <nickname or number> <text>, /me <action>");
         if (admin)
             reply(kColorServer, "Для хоста: /kick <ник или номер> [причина], /say <текст>, /go (начать миссию, не дожидаясь всех), "
-                                "/tphere all (собрать всех к себе), /tanks (танковое сражение, /tanks stop - закончить), /arena (наземное сражение: /arena якудза рандом 5, /arena list), /cheats off|on (чит-коды у всех)",
+                                "/tphere all (собрать всех к себе), /cheats off|on (чит-коды у всех)",
                   "For the host: /kick <nickname or number> [reason], /say <text>, /go (start the mission without waiting for all), "
-                  "/tphere all (bring everyone over), /tanks (a tank battle, /tanks stop ends it), /arena (a ground battle: /arena yakuza random 5, /arena list), /cheats off|on (cheat codes for all)");
+                  "/tphere all (bring everyone over), /cheats off|on (cheat codes for all)");
         reply(kColorServer, "В игре: /tp [ник] (к игроку), /tphere [ник] (игрока к себе), /mute <ник> (не слышать его голос), "
-                            "/draw <0.5–4> (дальность прорисовки), /tanks join (в танковое сражение), /sync (состояние синхронизации), /skip (на арене: следующая волна сразу), /gang или F5 (война банд: меню банды)",
+                            "/draw <0.5–4> (дальность прорисовки), /sync (состояние синхронизации)",
               "In the game: /tp [nickname] (go to a player), /tphere [nickname] (bring a player over), /mute <nickname> "
-              "(stop hearing their voice), /draw <0.5-4> (draw distance), /tanks join (into the tank battle), /sync (the sync's state), /skip (the arena: the next wave now), /gang or F5 (the gang war: the gang's menu)");
+              "(stop hearing their voice), /draw <0.5-4> (draw distance), /sync (the sync's state)");
     } else if (cmd == "players" || cmd == "status") {
         reply(kColorInfo, Format("Игроков: %d из %d", JoinedCount(), m_cfg.maxPlayers),
               Format("Players: %d of %d", JoinedCount(), m_cfg.maxPlayers));

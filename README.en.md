@@ -43,14 +43,10 @@ It is based on the original 0.2.7 and keeps everything from it. Added:
 - the car radio is the driver's, its passengers hear the same station; a passenger's mouse wheel picks the gun
 - a new sniper scope; the more players, the sharper and more numerous the enemies
 - goods at the 24/7 counter and at the bar with effects that last a while
-- tank battles (`/tanks`): shells fly, armour has a front and a rear, the game's tank crews fire, soldiers carry RPGs
-- ground battles (`/arena yakuza random 5`): waves of enemies in the missions' interiors and a boss at the end
 - the First Person mod (BoPoH, DK22Pac, DenSpb, Crspy, Junior_Djjr; installed on its own) works with it: one can walk
   back in its first-person view, the aiming mod (imCamAim) keeps out of its way, and it no longer says "unknown game
   version"; the host can turn cheat codes off for everyone (`/cheats off`)
 - the mouse in the chat: the wheel scrolls its history, the mouse picks messages, `Ctrl+C` copies them
-- a "Gang war" mode in Los Santos: four gangs of players and the computer, money, attacks on territories, purchases
-  and a win by the host's rules
 - the original SA:COOP 0.3.0's changes: side jobs together, the other player's moves, the firewall prompt, mission
   start points and map changes of the host's missions, and its fixes; from 0.3.1: the engine's scenes with the same
   camera, the lowriders and the beach dance for two, "Home Invasion" together, a partner can start a mission, vehicles
@@ -62,6 +58,9 @@ Not compatible with the original 0.2.x versions, everyone has to update. Playing
 barely been tested yet, so if something breaks, send `coop\coop.log` in Issues.
 
 ![The host and the partner on Grove Street](docs/images/en/street-host.jpg)
+
+The arena, the tank battle and the gang war of Los Santos are in an edition of their own:
+[Farus256/gta-sa-coop-arena-mod](https://github.com/Farus256/gta-sa-coop-arena-mod).
 
 ## What the mod does
 
@@ -191,92 +190,6 @@ A Grove Street homie another player's game made joins the gang of whoever called
 player goes into a building, the people and cars of its game near the other players do not vanish for them: they
 go over to those players' games.
 
-### Tanks
-
-A Rhino's gun fires a shell that flies (250 m/s, dropping a little, up to 750 m) and bursts where it hits; it can be
-seen in flight. The gun takes 4 seconds to load; the bottom of the screen shows whether it is loaded and how much
-armour is left. The turret lays itself where the camera looks, allowing for the shell's drop, and a sight on the
-screen marks where the shell will land (red: on a tank). Bullets and blasts still do nothing to a tank, but a shell goes through: about 18% of its strength
-in the front, 30% in a side, 45% in the rear. Tanks driven by the army or the police lay their guns and fire at a
-player with four wanted stars or more. Without friendly fire the players' tanks do not hurt each other.
-
-**A tank battle**: the host types `/tanks`. Every player within 400 m of the host gets a Rhino by the road, and 12
-seconds later three waves of enemy tanks come from 250-350 m away (as many as the players, one more each wave; they
-drive in to 140 m and fight from there, marked red on the radar and on the screen). Soldiers with rocket launchers come on foot with each
-wave (2, 3, 4): a rocket takes 30% of a tank's armour. The next wave comes only when every tank and soldier of this
-one is down. All three waves destroyed: $5000 to everyone in the
-battle. Everyone in it dead, or 15 minutes: lost. `/tanks join` joins it later, `/tanks stop` (the host) ends it.
-While it is on there are no passers-by and no traffic for its players: they go and none come till it ends. The
-enemies always know where the players are.
-
-### Ground battles
-
-The host types `/arena <enemies> <place> <waves>`, e.g. `/arena yakuza random 5` or `/arena ballas crack 3`
-(`/arena list` lists them all). Every player is taken into an interior of the story's missions: Big Smoke's crack
-palace, Madd Dogg's mansion, the meat factory, the Jefferson motel, the atrium, Liberty City, the
-police station, the Sherman dam, the Kickstart stadium (`random`: any). Enemies: yakuza, ballas, vagos, aztecas, triads, mafia, rifa, bikers, police, swat, army.
-1 to 10 waves, each bigger, better armed and better aimed. The next wave comes 6 seconds (30 in a big place) after
-the last of this one falls; `/skip` (or `/arena skip`) starts it at once. The last wave brings a boss: Tenpenny, Pulaski, Hernandez, Big Smoke, Ryder, OG Loc, T-Bone Mendez, Jizzy B
-or Mike Toreno, with an AK-47 (a gang's) or an M4 (the police's and Toreno), and with him, unannounced, his silent
-men working round the players; the boss is as tough as the SWAT, no headshot kills him at once. Enemies come in squads
-of 3-4 from all sides of the place, away from the players and not from where the last wave came (the mod works out
-the place's floor), and never out of a wall. They know no fear and always know where the players are: out of sight
-they come along the floor instead of walking into walls; in sight they fight, take cover, pop up and shoot, wait and
-push at the players as a squad; one stuck works its way out. Squads have grenadiers (who throw only when the grenade
-will get there). Knifemen come alone and steal up to a player's back out of its sight (waiting for it to look away),
-run as CJ does and stab from behind with the game's own animation; the police's and the SWAT's knifeman is Cerberus
-from Manhunt when his model (`cerberus.dff` and `cerberus.txd`) is added to `gta3.img` or to modloader. The last two
-waves bring snipers: they stand far off and shoot from there, and move on when they lose sight of the players. More
-armour each wave (half of it for the SWAT). The arena's doors out are shut while it is on, and the armour is gone
-after it. No wanted stars in an arena or a tank battle, and weapons taken up there are not kept after it.
-Weapons and body armour lie all over the place before each wave, the first one too, somewhere else each time
-(better each wave; less armour where drinks machines stand).
-A win pays everyone $1000 a wave, then takes everyone back where it stood. Everyone dead
-or gone: lost. `/arena stop` ends it. Offline, one can play an arena alone.
-
-### Gang war (Los Santos)
-
-A mode of its own that the host picks when it creates the server (F9 → "Mode: Gang war: LS"). Instead of the story,
-everyone starts a new game with no prologue and no missions, with Los Santos's territories as a new game has them.
-In the lobby each one clicks its gang: Grove Street Families, the Ballas, Los Santos Vagos or Varrios Los Aztecas
-(a gang can have several players, the first of them its leader). A gang nobody plays is left to the computer or
-left out (its territories are free then), as the host sets it in the lobby with the "Bot: ON / OFF" button on each
-gang's card. There the host also picks the win: every
-territory, a number of them, or the most of them when the time is up. No police, ambulances or fire engines come to
-an attack: near one (250 m) no wanted level is given, and one already there goes.
-
-The players come in at their gang's base in its clothes (the leader as Sweet, Big Smoke, Ryder or Cesar) with its
-weapons, and come back there after every death or arrest, not at a hospital. Their own gang's people on the street
-respect them, the others hate them, and players of different gangs hurt each other. The territories are painted in
-their owners' colours on the map and the radar as in the story (one under attack flashes), and the whole map is known
-from the start. The streets have a little fewer people and cars than usual, and there are no doors with yellow markers (barbers, clothes shops and the rest) and no weapons lying about the city. 5-10 of
-the gang's people (more with its weapons' level) walk the pavements about each base, a dead one replaced after 90
-seconds. The gang's own people of the street can be taken into the player's group (`G` in front of one, or locked on
-to it). Players of other gangs are not on the radar. The gang's leader sees the gang's house on the radar, and Grove
-Street's leader Emmet too. F1 does nothing in the game. Every player has the most respect in the war. Each base has its own way into a house: a ring in the gang's colour at the nearest house's door (or at the base itself when no
-house stands near), for the gang's own players. Every gang makes $200 of
-goods every 6 minutes; the money is the gang's, and any of its players spends it in the F5 menu (or `/gang`):
-
-| Purchase | Price | What it does |
-|---|---|---|
-| Attack a territory | $500 | set a target on the territory on the map and buy: 4 cars of your men drive there; the owners defend in two waves, it is yours when they are down, some of yours still stand there and no player of another gang is left in it (they have to be killed). Two attacks at most at once, by two different gangs |
-| Body armour | $200 | bought once and for good: armour for the gang's players at every start and for all its men, now and later |
-| Bribe the police | $550 | the police hunt the gang of the target's territory (or yours) for 5 minutes |
-| Faster goods | $1000 | the goods are made faster |
-| Dearer goods | $1000 ($2000 after faster goods) | the goods sell for twice as much |
-
-The gangs' own. **Grove Street**: its first 4 attacks cost $150 (3 cars), the police bribe $700, and Emmet gives
-armour for free, and once a weapons upgrade. **The Ballas**: the police bribe $350, they take protection money from the
-24/7s, bars and clubs in their territories (+$50 each with the goods), but the more goods they sold, the worse their
-men aim. **The Vagos**: faster goods $600, dearer goods $1000, their goods sell faster, more men but with little health
-and aim. **The Aztecas**: the best shots, they come to an attack on bikes, two on each, shooting from them.
-
-The gangs' weapons go up by levels (three for the Ballas, four for the others): from a pistol or a Desert Eagle to
-the AK-47, the M4, the MP5, grenades and Molotov cocktails. Now and then a military convoy turns up in the city: the
-gang whose player drives its truck to the gang's base gets the next level; the top of the screen says how far it is
-(and, at its wheel, how far the base is). A gang with no territory is out. Deals
-cut off, contraband, the San Fierro and Las Venturas modes and C.R.A.S.H. come later.
-
 ### Russian and English
 
 The SA:COOP window, the chat and the hints come in Russian and English. The language switch is at the top of the
@@ -355,7 +268,6 @@ sees "The server does not answer", even on a home network. If an antivirus remov
 | B | voice chat while the key is held |
 | G | take the nearest free passenger seat; by a Grove Street homie (another game's too): call him into your gang |
 | E | revive a wounded partner next to you; wounded: hold to give up; by a clerk or a barman: the menu, `1`-`4` to buy; |
-| Left mouse button in a tank | fire (4 s to reload) |
 | Mouse wheel | as a passenger: pick the gun to shoot out of the window |
 | Right mouse button | as a passenger: lean out of the window with the gun, fire with the left button |
 | F2 | the player list |
@@ -371,10 +283,6 @@ Chat commands:
 | `/go` | host: start the mission without waiting for the missing ones |
 | `/mute <nick>`, `/unmute <nick>` | stop / start hearing a player's voice (for you only) |
 | `/draw [0.5-4] [detail]` | draw distance (4 by default, 1 is the game's own) |
-| `/tanks` | host: a tank battle; `/tanks join` joins it, `/tanks stop` ends it |
-| `/arena` | host: a ground battle, `/arena yakuza random 5`; `/arena list` lists, `/arena stop` ends it |
-| `/skip` | the arena: start the next wave now |
-| `/gang`, F5 | the gang war: the gang's menu |
 | `/cheats off`, `/cheats on` | host: turn cheat codes off or on for everyone |
 | `/sync` | the sync's state: ping, the delay to each player, how many people and cars your game runs |
 | `/code <cheat>` | enter a cheat, for example `/code HESOYAM` |

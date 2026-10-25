@@ -333,7 +333,6 @@ void SaveConnectSettings() {
     ini.SetInt("connect", "friendly_fire", cfg.friendlyFire);
     ini.SetInt("connect", "no_cheats", cfg.noCheats);
     ini.SetInt("connect", "max_players", cfg.maxPlayers);
-    ini.SetInt("connect", "game_mode", cfg.gameMode);
     ini.Save(cfg.iniPath);
 }
 
