@@ -101,6 +101,69 @@ uint8_t* LocalGroupFollowFlag() {
     return (uint8_t*)(kGroups + (uintptr_t)g * kGroupSize + 4);  // CPedGroup::m_bMembersEnterLeadersVehicle
 }
 
+// A group nobody uses (the last free one), for a remote player while it is processed: what its processing tells its
+// group (it got into a car: the members get in with it) reached this game's player's members all the same, and OG Loc,
+// a member of the host's group in "OG Loc", got off the host's bike and went after the partner. -1: none free.
+int IdlePedGroup() {
+    for (int i = (int)kGroupCount - 1; i >= 0; --i)
+        if (!Ref<uint8_t>(kActiveGroups + i)) return i;
+    return -1;
+}
+
+// a remote player's group is the idle one for the scope (its processing, a warp into a car), this game's player's after:
+// its own data and the slot's it is processed in
+struct QuietGroup {
+    void* data;
+    int32_t saved = -1, slotSaved = -1;
+    explicit QuietGroup(CPed* ped) : data(ped ? ped->PlayerData() : nullptr) {
+        if (!data) return;
+        saved = GroupOf(data), slotSaved = GroupOf(SlotData());
+        if (int idle = IdlePedGroup(); idle >= 0) GroupOf(data) = GroupOf(SlotData()) = idle;
+    }
+    ~QuietGroup() {
+        if (!data) return;
+        GroupOf(data) = saved;
+        GroupOf(SlotData()) = slotSaved;
+    }
+};
+
+// CPedGroupMembership of group g (CPedGroup +8): m_apMembers[8] from +4, the leader the last (+0x20)
+uintptr_t Membership(int32_t g) { return kGroups + (uintptr_t)g * kGroupSize + 8; }
+CPed*& LeaderOf(uintptr_t membership) { return Ref<CPed*>(membership + 0x20); }
+bool OurMembership(void* m) {
+    int32_t g = LocalGroup();
+    return g >= 0 && g < (int32_t)kGroupCount && (uintptr_t)m == Membership(g);
+}
+
+// A remote player is never a leader or a member of this game's player's group. Made its leader, the group followed it:
+// OG Loc, the host's man in "OG Loc", ran after the partner and got into the partner's car instead of the host's bike.
+using SetLeaderFn = void(__fastcall*)(void*, void*, CPed*);
+SetLeaderFn g_origSetLeader = nullptr;
+using AddMemberFn = void(__fastcall*)(void*, void*, CPed*, int);
+AddMemberFn g_origAddMember = nullptr;
+void KeptOut(const char* what, void* from) {
+    static int said = 0;
+    if (said++ < 20) LOGW("A remote player was made %s of our group (from %p): kept out", what, from);
+}
+void __fastcall HookSetLeader(void* membership, void* edx, CPed* ped) {  // CPedGroupMembership::SetLeader
+    if (ped && OurMembership(membership) && Players::Instance().FindByPed(ped)) return KeptOut("the leader", __builtin_return_address(0));
+    g_origSetLeader(membership, edx, ped);
+}
+void __fastcall HookAddMember(void* membership, void* edx, CPed* ped, int index) {  // CPedGroupMembership::AddMember
+    if (ped && OurMembership(membership) && Players::Instance().FindByPed(ped)) return KeptOut("a member", __builtin_return_address(0));
+    g_origAddMember(membership, edx, ped, index);
+}
+// whatever got past that (a reload, a respawn): this game's player leads its group again
+void KeepOurLeader(CPlayerPed* me) {
+    int32_t g = LocalGroup();
+    if (g < 0 || g >= (int32_t)kGroupCount || !Ref<uint8_t>(kActiveGroups + g)) return;
+    uintptr_t m = Membership(g);
+    CPed* leader = LeaderOf(m);
+    if (leader == me || !leader || !Players::Instance().FindByPed(leader)) return;
+    LOGW("A remote player led our group: our player leads it again");
+    g_origSetLeader((void*)m, nullptr, me);
+}
+
 void ReleaseOwnData(RemotePlayer& rp) {
     if (!rp.hasData) return;
     for (int off : kDataRefs)
@@ -379,11 +442,14 @@ void __fastcall HookPlayerProcessControl(CPlayerPed* self, void* edx) {
     uint8_t* follow = LocalGroupFollowFlag();
     uint8_t followSaved = follow ? *follow : 0;
     if (follow) *follow = 0;
-    g_inRemoteContext = true;
-    g_origProcessControl(self, edx);
-    DriveBy(self);  // still under its pad and camera
-    FireOwedShot(*rp);
-    g_inRemoteContext = false;
+    {
+        QuietGroup quiet(self);
+        g_inRemoteContext = true;
+        g_origProcessControl(self, edx);
+        DriveBy(self);  // still under its pad and camera
+        FireOwedShot(*rp);
+        g_inRemoteContext = false;
+    }
     if (follow) *follow = followSaved;
     RestoreLocal(saved);
     // Aiming, the game turned the copy to where its owner's camera aims from where the copy stands: up to 7 degrees off.
@@ -921,6 +987,8 @@ proto::PlayerMask PlayersNear(const CVector& p, int8_t area, float radius, bool 
 // ------------------------------------------------------------------ module
 void Players::OnInstallHooks() {
     mem::HookFn(0x60EA90, &HookPlayerProcessControl, &g_origProcessControl, "CPlayerPed::ProcessControl");
+    mem::HookFn(0x5FB9C0, &HookSetLeader, &g_origSetLeader, "CPedGroupMembership::SetLeader");
+    mem::HookFn(0x5F6AE0, &HookAddMember, &g_origAddMember, "CPedGroupMembership::AddMember");
     void* coopGame = nullptr;  // CGameLogic::IsCoopGameGoingOn, always false (Patches)
     mem::RedirectCall(0x644A1A, (const void*)&PassengerDriveBy, &coopGame);
     mem::Nop(0x644A27, 28);  // the SMG slot holds a weapon with ammo (PassengerDriveBy checks the gun in hand)
@@ -1582,6 +1650,7 @@ bool Players::RideTrain(RemotePlayer& rp) {
     if (CPed* d = train->Driver(); d && d->IsPlayer()) return true;      // taken here
     else if (d) Cmd(0x009B).I(GetPedRef(d)).Run();                       // DELETE_CHAR: the copy's own driver
     Field<uint8_t>(train, 0x42A) |= 2;  // bHasBeenOwnedByPlayer: a player warped in reports a car theft (0x64BBBA) on ours
+    QuietGroup quiet(rp.ped);  // its getting in calls nobody of ours
     Cmd(0x036A).I(rp.pedHandle).I(GetVehicleRef(train)).Run();          // WARP_CHAR_INTO_CAR
     return true;
 }
@@ -1622,14 +1691,30 @@ void Players::ApplyVehicleSeat(RemotePlayer& rp) {
             Cmd(0x0362).I(GetPedRef(d)).F(p.x).F(p.y).F(p.z + 1.0f).Run();  // WARP_CHAR_FROM_CAR_TO_COORD
             LOGI("Player %d drives vehicle %04X in its game: the driver here gets out", rp.id, nv->netId);
         }
+        QuietGroup quiet(rp.ped);  // its getting in calls nobody of ours
         Cmd(0x036A).I(rp.pedHandle).I(nv->handle).Run();  // WARP_CHAR_INTO_CAR
         if (nv->veh->Driver() == ped) nv->veh->SetStatus(3);  // STATUS_PHYSICS: its owner's state moves it
     } else {
         if (SeatOrAny(nv->veh, rp.seat) < 0 || nv->veh->Passengers()[rp.seat]) return;  // no such seat, or taken
+        QuietGroup quiet(rp.ped);
         Cmd(0x0430).I(rp.pedHandle).I(nv->handle).I(rp.seat).Run();  // WARP_CHAR_INTO_CAR_AS_PASSENGER
     }
     rp.enterTaskMs = NowMs() - kEnterGraceMs + 1500;  // retry no more often than every 1.5 s
 }
+
+// A bike the host's mission made, or the one the host rides in it, is the mission's: in "OG Loc" OG Loc gets on behind
+// CJ on the bike the script made for them only (TASK_ENTER_CAR_AS_PASSENGER on that bike, then it waits for both on
+// it), and Freddy flees on the other. A partner behind the host (G) or on one of them left OG Loc no seat and the
+// mission waiting for good. A partner gets a bike of its own instead (FollowHost).
+namespace {
+bool MissionBike(CVehicle* v) {
+    if (!v || !v->IsBike() || Net().IsHost() || !HostMissionRecent(0)) return false;
+    RemotePlayer* host = Players::Instance().Get(Net().HostId());
+    if (host && host->ped && v->Driver() == host->ped) return true;
+    NetVehicle* nv = Vehicles::Instance().Find(v);
+    return nv && nv->script && proto::EntityMaker(nv->netId) == Net().HostId();
+}
+}  // namespace
 
 // The nearest free seat by where one gets in to it: the door of that seat (CCarEnterExit::GetPositionToOpenCarDoor of
 // ComputeTargetDoorToEnterAsPassenger), whoever's car it is. It used to be the nearest car's first free seat, and the
@@ -1649,6 +1734,7 @@ void Players::TryEnterAsPassenger() {
         if (pool->byteMap[i] < 0) continue;
         auto* v = (CVehicle*)(pool->objects + (size_t)i * kVehiclePoolElemSize);
         if ((v->GetPosition() - mp).Length() > 12.0f || v->Status() == 5 /* wrecked */ || v->IsTrain()) continue;  // a train's copy is locked (Trains)
+        if (MissionBike(v)) continue;
         for (int s = 0; s < v->MaxPassengers() && s < 8; ++s) {
             if (v->Passengers()[s]) continue;
             int door = Call<0x64F190, int>(v, s);  // CCarEnterExit::ComputeTargetDoorToEnterAsPassenger
@@ -1674,9 +1760,23 @@ void Players::DetectCarTasks() {
     bool passenger = type == TASK_ENTER_CAR_AS_PASSENGER || type == TASK_ENTER_CAR_AS_PASSENGER_TIMED;
     if ((type == TASK_ENTER_CAR_AS_DRIVER || passenger) && task) {
         auto* target = Field<CVehicle*>(task, 0x0C);  // CTaskComplexEnterCar::m_Car, ...AsPassengerTimed::m_TargetCar
+        if (target && IsVehicleValid(target) && MissionBike(target)) {  // the mission's: not for us (MissionBike)
+            Cmd(0x0792).I(GetPedRef(me)).Run();  // CLEAR_CHAR_TASKS_IMMEDIATELY: still on foot, by it
+            static uint64_t toldMs = 0;
+            if (NowMs() - toldMs > 10000) {
+                toldMs = NowMs();
+                ui::TheChat().AddSystem(TR("Этот мотоцикл нужен миссии. Когда хост поедет, рядом с вами появится свой.",
+                                           "This bike is the mission's. When the host rides off, you get one of your own."));
+                LOGI("Kept off a bike of the host's mission");
+            }
+            return;
+        }
         if (target && target != m_enterReported && IsVehicleValid(target)) {
             m_enterReported = target;
             if (NetVehicle* nv = Vehicles::Instance().EnsureNetworked(target)) {
+                LOGI("Our player gets into vehicle %04X (model %d, %s's game%s)%s", nv->netId, target->ModelIndex(),
+                     Net().PeerName(proto::EntityMaker(nv->netId)).c_str(), nv->script ? ", a script's" : "",
+                     passenger ? " as a passenger" : "");
                 int seat = -1;
                 if (type == TASK_ENTER_CAR_AS_PASSENGER_TIMED)  // the door the command chose for its seat (0: any)
                     seat = SeatOfTargetDoor(Field<int32_t>(task, 0x14));
@@ -1934,6 +2034,7 @@ void Players::OnPostProcess() {
     }
     DetectCarTasks();
     KeepDriversGoing();
+    KeepOurLeader(me);
     FollowHost();
     if (me->InVehicle() && me->Vehicle() && me->Vehicle()->Driver() == me) m_lastCar = GetVehicleRef(me->Vehicle());
     if (me->InVehicle() && me->Vehicle() && !me->Vehicle()->IsTrain()) SendVehicleState(me->Vehicle());
@@ -1973,6 +2074,10 @@ void Players::FollowHost() {
     for (int i = 0; bike && i < bike->MaxPassengers() && i < 8; ++i) full = full && bike->Passengers()[i];
     if (!bike || bike == m_bikeFor || !land || !full) return;
     if ((!flow::IsFollower() && !HostMissionRecent(20000)) || (hpos - mpos).Length() > 60.0f) return;
+    // Once the host rides off on it. Made while the mission still put him on it, ours stood by its own, the same model
+    // ("OG Loc": two PCJs of the mission, and one more by them): the host got on ours, and OG Loc, who gets on behind CJ on
+    // the mission's bike only, waited by it for good.
+    if (bike->MoveSpeed().Length() * 50.0f < 4.0f) return;
     m_bikeFor = bike;
     m_followAt = NowMs();
     if (!IsModelLoaded(model)) {

@@ -690,6 +690,14 @@ void Apply() {
     // heading was set from the stick every frame, still or not (the copy shook while crouched and aiming). Never.
     mem::Write(0x442020, retFalse, sizeof(retFalse));
 
+    // The map's objects stand in the dummy pool (CPools::ms_pDummyPool, 2500 of 0x38 bytes) until they come near, and the
+    // long draw distance keeps far more of the map loaded: at the end of "OG Loc" the host's mission's LOAD_SCENE filled
+    // it, CDummy::operator new gave NULL and CFileLoader::LoadObjectInstance read through it (0x538103). CPools::
+    // Initialise makes it bigger, unless a limit adjuster has already changed that size.
+    static const uint8_t dummyPool[] = {0x68, 0xC4, 0x09, 0x00, 0x00};  // push 2500
+    if (mem::Check(0x5510CE, dummyPool, sizeof(dummyPool))) mem::Put<uint32_t>(0x5510CF, 8000);
+    else LOGI("Dummy pool size left alone: another mod changed it");
+
     if (cfg.multiInstance) {
         mem::Write(0x7468E0, retFalse, sizeof(retFalse));  // IsAlreadyRunning -> false
         IsolateInstance();
