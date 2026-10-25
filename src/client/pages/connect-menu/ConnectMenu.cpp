@@ -244,17 +244,28 @@ void GangWindow(float x, float y, float W, float H) {
         };
         who(Net().MyId());
         for (auto& [id, peer] : Net().Peers()) who(id);
+        // the gang's bot: a switch at the card's foot (the host's; the others see how it stands). It plays only a gang
+        // nobody picked: with players in it the switch says so
         bool clickedToggle = false;
-        if (!players) {
-            std::string state = Rules().ai[k] ? TR("Играет компьютер", "The computer plays it") : TR("Нет в игре", "Left out");
-            float ly = by + cardH - lh - 8 * s;
-            bool overToggle = host && st.mouseY >= ly - 2 * s && st.mouseY < ly + lh + 2 * s && hover;
-            g.Text(FONT_SMALL, bx + 8 * s, ly, host ? "< " + state + " >" : state, overToggle ? w::kSaBlue : w::kSaMuted, TEXT_SHADOW);
-            if (overToggle && st.lmbPressed) {
-                Rules().ai[k] = Rules().ai[k] ? 0 : 1;
+        {
+            bool ai = Rules().ai[k] != 0;
+            float bh = lh + 10 * s, bw = cardW - 16 * s, bxx = bx + 8 * s, byy = by + cardH - bh - 8 * s;
+            bool over = host && st.mouseX >= bxx && st.mouseX < bxx + bw && st.mouseY >= byy && st.mouseY < byy + bh;
+            uint32_t col = players ? w::kSaMuted : ai ? 0xFF4FD06A : 0xFFE05050;
+            g.Rect(bxx, byy, bw, bh, over ? WithAlpha(col, 0.30f) : WithAlpha(col, 0.14f));
+            g.RectOutline(bxx, byy, bw, bh, over ? 0xFFFFFFFF : col, std::max(1.0f, s));
+            std::string label = std::string(TR("Бот: ", "Bot: ")) + (ai ? TR("ВКЛ", "ON") : TR("ВЫКЛ", "OFF"));
+            if (players) label += TR(" (играют люди)", " (players in it)");
+            else label += ai ? TR(" — играет компьютер", ": the computer plays it") : TR(" — банды нет в игре", ": left out");
+            g.Text(FONT_SMALL, bxx + bw * 0.5f, byy + 5 * s, label, players ? w::kSaMuted : 0xFFFFFFFF, TEXT_CENTER | TEXT_SHADOW);
+            if (over && st.lmbPressed) {
+                Rules().ai[k] = ai ? 0 : 1;
                 SendRoster();
                 clickedToggle = true;
             }
+            if (host && !players && hover && !over)
+                g.Text(FONT_SMALL, bxx, byy - lh - 2 * s, TR("Кнопка ниже — вкл/выкл бота", "The button below: the bot on/off"), w::kSaMuted,
+                       TEXT_SHADOW);
         }
         if (hover && st.lmbPressed && !clickedToggle && !lit) Pick((uint8_t)k);
     }

@@ -53,12 +53,24 @@ constexpr int kLodListRoom = (0x2000 - 24) / 8;
 constexpr float kMaxFarClip = 3000.0f;  // 0.4.0: farther (was 2400); the fog thickens over the last part
 // The models' detail range at most this (the menu's slider ends at 1.8): beyond, the streamer cannot keep the HD models
 // in, they swap with their LODs back and forth, and the two overlap while they cross-fade (their textures shimmer).
-constexpr float kMaxLodScale = 2.2f;  // 0.4.0: farther (was 1.9), with the larger streaming memory
+// 0.5.2: 2.0 (0.4.0's 2.2 kept the streamer swapping models with their LODs over the city at a view of 2 and more)
+constexpr float kMaxLodScale = 2.0f;
 
+// The stretch moves in steps of a tenth and seldom. 0.4.0's went down a little whenever the lists were 72% full and up
+// a little whenever they were under 60%, every frame: at a view of 2 and more over the city the lists stood about
+// there, the far plane and the models' range went back and forth all the time, and the distance flickered (things at
+// its edge came and went, buildings swapped with their LODs). Now: a tenth back at once when the lists are nearly
+// full (and nothing more for a few frames, till the frame shows it), a tenth out only after 3 s of room, never sooner
+// than a while after the last step back (15 s, doubled with each step back soon after, up to 2 minutes), and the view
+// grows into the new tenth smoothly over a second.
 float g_adapt = 1.0f;          // the share of the configured stretch in use now (0: the game's own view)
+float g_shown = 1.0f;          // ... as the frame has it (follows g_adapt: at once down, smoothly up)
 uint32_t g_droppedFrame = 0;   // entities the guard left out since the last frame
 uint32_t g_dropped = 0;        // ... since the last log line
 float g_minAdapt = 1.0f;       // the lowest share since the last log line
+int g_settle = 0;              // frames to wait after a step back
+uint64_t g_holdUntilMs = 0, g_roomSinceMs = 0, g_lastBackMs = 0;
+uint64_t g_holdMs = 15000;
 
 // How full the renderer's lists were in the frame drawn last (they keep their counts until the next one is built)
 float LastFill() {
@@ -71,10 +83,26 @@ float LastFill() {
 
 void Adapt() {
     float fill = LastFill();
-    if (g_droppedFrame || fill > 0.85f) g_adapt -= 0.1f;  // nearly full: back at once
-    else if (fill > 0.72f) g_adapt -= 0.01f;
-    else if (fill < 0.6f) g_adapt += 0.004f;               // room again: out slowly (a few seconds), no blinking at the edge
-    g_adapt = std::clamp(g_adapt, 0.0f, 1.0f);
+    uint64_t now = NowMs();
+    if (g_settle > 0) --g_settle;
+    if ((g_droppedFrame || fill > 0.85f) && (g_settle == 0 || g_droppedFrame) && g_adapt > 0.0f) {
+        g_adapt = std::max(0.0f, std::round(g_adapt * 10.0f) / 10.0f - 0.1f);
+        g_settle = 6;
+        g_holdMs = now - g_lastBackMs < 60000 ? std::min<uint64_t>(g_holdMs * 2, 120000) : 15000;
+        g_holdUntilMs = now + g_holdMs;
+        g_lastBackMs = now;
+        g_roomSinceMs = 0;
+    } else if (fill < 0.6f && g_adapt < 1.0f && now >= g_holdUntilMs) {
+        if (!g_roomSinceMs) g_roomSinceMs = now;
+        if (now - g_roomSinceMs > (g_lastBackMs ? 3000u : 800u)) {  // a world just loaded: out sooner till the first step back
+            g_adapt = std::min(1.0f, std::round(g_adapt * 10.0f) / 10.0f + 0.1f);
+            g_roomSinceMs = 0;
+            g_holdUntilMs = now + 3000;
+        }
+    } else if (fill >= 0.6f) {
+        g_roomSinceMs = 0;
+    }
+    g_shown = g_adapt < g_shown ? g_adapt : std::min(g_adapt, g_shown + 0.0035f);  // ~a second per tenth at 30 fps
     g_minAdapt = std::min(g_minAdapt, g_adapt);
     g_droppedFrame = 0;
 }
@@ -85,7 +113,7 @@ void __cdecl HookTimeCycleUpdate() {
     g_origTimeCycleUpdate();
     Adapt();
     const auto& cfg = Cfg();
-    float k = 1.0f + (cfg.drawDistance - 1.0f) * g_adapt;
+    float k = 1.0f + (cfg.drawDistance - 1.0f) * g_shown;
     if (std::fabs(k - 1.0f) > 0.01f) {
         float& farClip = Ref<float>(kFarClip);  // ("far" is a macro of windows.h)
         float& fog = Ref<float>(kFogStart);
@@ -100,7 +128,7 @@ void __cdecl HookTimeCycleUpdate() {
     }
     float menu = Ref<float>(kMenuDrawDistance);
     if (menu > 0.1f && menu < 10.0f) {
-        float l = 1.0f + (cfg.lodDistance - 1.0f) * g_adapt;
+        float l = 1.0f + (cfg.lodDistance - 1.0f) * g_shown;
         Ref<float>(kLodDistScale) = std::min(menu * l, std::max(menu, kMaxLodScale));
     }
 }
@@ -159,7 +187,8 @@ public:
         LOGI("Draw distance x%.2f, model detail x%.2f", Cfg().drawDistance, Cfg().lodDistance);
     }
     void OnGameStarted() override {
-        g_adapt = 0.0f;  // a world just loaded: its view grows as the lists show room
+        g_adapt = g_shown = 0.0f;  // a world just loaded: its view grows as the lists show room
+        g_holdUntilMs = g_roomSinceMs = g_lastBackMs = 0, g_holdMs = 15000, g_settle = 0;
         RaiseStreamingMemory();
     }
     void OnPreProcess() override {

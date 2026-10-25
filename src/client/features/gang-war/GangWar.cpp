@@ -4,7 +4,9 @@
 // city as a new game has it, its territories as well). Each player comes into the war at its gang's base, as one of
 // its men (the gang's first player, its leader, as Sweet, Big Smoke, Ryder or Cesar), with its gang's weapons, and back
 // there after a death. The streets have far fewer people and cars than usual. The gang's own people on the street
-// respect its players, the other gangs hate them; players of different gangs hurt each other (Damage).
+// respect its players, the other gangs hate them; players of different gangs hurt each other (Damage). The city is the
+// war's: its territories in their gangs' colours on the map and the radar, the whole map known, no doors with markers,
+// no weapons lying about, and a passer-by killed pays $50-150.
 //
 // The host's game keeps the war: every gang makes $200 of goods every 6 minutes (the Vagos sell faster; upgrades make
 // more of it, and dearer; the Ballas take protection money from the shops, bars and clubs in their territories), and
@@ -12,8 +14,9 @@
 //   an attack on a territory (the one the buyer stands in): four cars of the gang's men drive in from the side of its
 //     base and fight the owners' two waves of defenders; the gang takes it when all of them are down and someone of
 //     the gang still stands there (a free territory: when it holds it for 20 s);
-//   body armour for all its players; the police bribed in an enemy territory (cops there go for that gang for 5
-//   minutes); faster goods; dearer goods.
+//   body armour, bought once for good (its players at every start, all its men); the police bribed in an enemy
+//   territory (cops there go for that gang for 5 minutes); faster goods; dearer goods.
+// Its players come back at its base after every death (Players, CGameLogic::RestorePlayerStuffDuringResurrection).
 // The gangs' own: Grove Street's first four attacks cost $150 with three cars, Emmet gives its players armour and once
 // a weapons upgrade; the Ballas' men aim worse the more goods they sold; the Vagos have more men, with less health and
 // aim; the Aztecas aim best and come on bikes, two on each, shooting from them.
@@ -48,6 +51,7 @@
 #include "shared/game/Game.h"
 #include "shared/game/Script.h"
 #include "shared/lib/core/Core.h"
+#include "shared/lib/memory/Memory.h"
 #include "shared/ui/chat/Chat.h"
 #include "shared/ui/marks/Marks.h"
 #include "shared/ui/renderer/Renderer.h"
@@ -99,7 +103,8 @@ const char* const kItemNames[kItems][2] = {
 const char* const kItemHints[kItems][2] = {
     {"", ""},
     TRP("на территорию, где вы стоите, едут машины ваших бойцов", "your men's cars drive to the territory you stand in"),
-    TRP("броня всем игрокам банды", "armour for all the gang's players"),
+    TRP("броня навсегда: игрокам банды при каждом появлении и всем её бойцам",
+        "armour for good: the gang's players at every start and all its men"),
     TRP("полиция 5 минут охотится на банду этой территории", "the police hunt this territory's gang for 5 minutes"),
     TRP("товар производится быстрее", "the goods are made faster"), TRP("товар стоит дороже", "the goods sell for more"),
     {"", ""}};
@@ -310,11 +315,6 @@ void Teleport(const CVector& to, float heading) {
     Cmd(0x0373).Run();                                 // SET_CAMERA_BEHIND_PLAYER
 }
 
-CVector BaseSpot(int gang) {  // a little apart for each of its players
-    float a = (float)Net().MyId() * 1.1f;
-    return Info(gang).base + CVector{std::cos(a) * 2.0f, std::sin(a) * 2.0f, 0.0f};
-}
-
 // the leaders' special characters, in their own slots in every game (no story uses them in this mode)
 void LoadSpecials() {
     if (g_specialsLoaded) return;
@@ -376,12 +376,86 @@ void EnterWar() {
     if (!me || gang >= kGangs) return;
     LoadSpecials();
     Relations(gang);
-    Teleport(BaseSpot(gang), Rand(0.0f, 360.0f));
+    Teleport(gangmode::BaseSpot(Net().MyId()), Rand(0.0f, 360.0f));
     Wear();
     GiveKit();
     me->Health() = std::max(me->Health(), 100.0f);
+    if (State(gang).flags & F_ARMOUR) me->Armour() = 100.0f;
     g_entered = true;
     LOGI("Gang war: our player came into the war for %s", Info(gang).name[1]);
+}
+
+// ---- the city of the war, in every game
+// Few people and cars on the streets (a passer-by or a car only now and then)
+constexpr float kPedDensity = 0.08f, kCarDensity = 0.10f;
+
+// The engine's gang war statics: on, with no training mission and no zones of a mission's own, the radar and the map
+// draw every territory's square in its gang's colour (CRadar::DrawRadarGangOverlay asks
+// CGangWars::CanPlayerStartAGangWarHere, which with bTrainingMission allows only the training's zone: 0.5.0 set it and
+// no square showed). The engine's own wars stay out: CGangWars::Update is not run in this mode (HookGangWarsUpdate).
+void KeepGangWarStatics() {
+    Ref<float>(0x96AB5C) = 0.0f;  // CGangWars::Provocation
+    Ref<uint8_t>(0x96AB90) = 1;   // bGangWarsActive
+    Ref<uint8_t>(0x96AB91) = 0;   // bTrainingMission
+    Ref<int32_t>(0x96AB94) = 0;   // NumSpecificZones
+}
+
+// The whole map known from the start: the ten by ten squares of the map's fog all visited
+void RevealMap() {
+    for (int i = 0; i < 100; ++i) Ref<uint8_t>(0xBA3730 + i) = 1;  // CTheZones::ZonesVisited[10][10]
+    Ref<int32_t>(0xBA372C) = 100;                                 // CTheZones::ZonesRevealed
+}
+
+// No doors with their yellow markers (barbers, clothes shops, burger bars, Ammu-Nations, houses): nothing of them is in
+// the war. A street door's CEntryExit::bEnableAccess (+0x30, 0x4000) off: CEntryExitManager::Update neither draws its
+// marker nor takes a player through. Kept off (a script or a restart turns them on).
+constexpr uint16_t kEnexEnableAccess = 0x4000;
+void ShutStreetDoors() {
+    auto* pool = Ref<CPoolHeader*>(0x96A7D8);  // CEntryExitManager::mp_poolEntryExits, CEntryExit 0x3C bytes
+    for (int i = 0; pool && i < pool->size; ++i) {
+        if (pool->byteMap[i] < 0) continue;
+        uintptr_t e = (uintptr_t)pool->objects + (uintptr_t)i * 0x3C;
+        if (Ref<int8_t>(e + 0x32) == 0) Ref<uint16_t>(e + 0x30) &= (uint16_t)~kEnexEnableAccess;  // m_nArea 0: outside
+    }
+}
+
+// No weapons lying about the city (the street's pickups that come back: their guns, models 321-372)
+void ClearStreetWeapons() {
+    for (int i = 0; i < 620; ++i) {
+        uintptr_t p = 0x9788C0 + (uintptr_t)i * 0x20;  // CPickups::aPickUps: +0x18 model, +0x1C type
+        uint8_t type = Ref<uint8_t>(p + 0x1C);
+        int model = Ref<int16_t>(p + 0x18);
+        if ((type == 2 || type == 15) && model >= 321 && model <= 372) CallMethod<0x4556C0>((void*)p);  // CPickup::Remove
+    }
+}
+
+// A gang whose armour was bought: all its men have it, those on the street (this game's own) as well, once each
+std::set<CPed*> g_armoured;
+void ArmourGangMen() {
+    std::set<CPed*> now;
+    CPoolHeader* pool = PedPool();
+    for (int i = 0; pool && i < pool->size; ++i) {
+        if (pool->byteMap[i] < 0) continue;
+        auto* p = (CPed*)(pool->objects + (size_t)i * kPedPoolElemSize);
+        if (p->IsPlayer() || p->Health() <= 0.0f || Players::Instance().FindByPed(p)) continue;
+        int gang = -1;
+        for (int g = 0; g < kGangs; ++g)
+            if (p->PedType() == Info(g).pedType) gang = g;
+        if (gang < 0 || !(State(gang).flags & F_ARMOUR)) continue;
+        now.insert(p);
+        if (!g_armoured.count(p)) p->Armour() = std::max(p->Armour(), 100.0f);
+    }
+    g_armoured.swap(now);
+}
+
+void KeepWorld() {
+    Cmd(0x03DE).F(kPedDensity).Run();  // SET_PED_DENSITY_MULTIPLIER
+    Cmd(0x01EB).F(kCarDensity).Run();  // SET_CAR_DENSITY_MULTIPLIER
+    KeepGangWarStatics();
+    RevealMap();
+    ShutStreetDoors();
+    ClearStreetWeapons();
+    ArmourGangMen();
 }
 
 void UpdatePlayer() {
@@ -396,9 +470,11 @@ void UpdatePlayer() {
     }
     // back at the base after a death (the game's hospital first)
     bool dead = me->Health() <= 0.0f;
-    if (g_wasDead && !dead) {
-        Teleport(BaseSpot(gang), Rand(0.0f, 360.0f));
+    if (g_wasDead && !dead) {  // the game put it back at the base already (Players): the scene loaded, the guns
+        if ((me->GetPosition() - gangmode::BaseSpot(Net().MyId())).Length2D() > 15.0f)
+            Teleport(gangmode::BaseSpot(Net().MyId()), Rand(0.0f, 360.0f));
         GiveKit();
+        if (State(gang).flags & F_ARMOUR) me->Armour() = 100.0f;  // the gang's armour: at every start
     }
     g_wasDead = dead;
     if (State(gang).level != g_kitLevel && !dead && !me->InVehicle()) GiveKit();
@@ -406,13 +482,9 @@ void UpdatePlayer() {
         g_lookMs = now;
         Wear();
     }
-    if (now - g_densityMs > 3000) {  // far fewer people and cars than usual
+    if (now - g_densityMs > 3000) {
         g_densityMs = now;
-        Cmd(0x03DE).F(0.35f).Run();  // SET_PED_DENSITY_MULTIPLIER
-        Cmd(0x01EB).F(0.4f).Run();   // SET_CAR_DENSITY_MULTIPLIER
-        Ref<float>(0x96AB5C) = 0.0f;  // CGangWars::Provocation: the engine's own wars stay out of it
-        Ref<uint8_t>(0x96AB90) = 1;   // CGangWars::bGangWarsActive: the radar shows the territories
-        Ref<uint8_t>(0x96AB91) = 1;   // bTrainingMission (with no zones of its own): the engine starts no war by itself
+        KeepWorld();
     }
     // Grove Street at Emmet's: armour (and once a weapons upgrade for the gang)
     if (gang == GROVE && !dead && !me->InVehicle() && (me->GetPosition() - kEmmet).Length() < 4.0f && now - g_emmetAskMs > 5 * kMin) {
@@ -437,6 +509,16 @@ void Buy(Item item) {
 }
 
 // ---------------------------------------------------------------- the host's war
+// what every game shows of an attack and of the convoy (the host's own too: its messages go to the others)
+struct CaptView {
+    bool on = false;
+    uint8_t att = NONE, def = NONE, defLeft = 0, attLeft = 0;
+    int zone = -1;
+    CVector mid;
+} g_captView;
+bool g_convoyOn = false;
+CVector g_convoyAt;
+
 struct HostGang {
     uint64_t nextIncome = 0, nextAiMs = 0;
 };
@@ -534,9 +616,14 @@ void HostBegin() {
         g_host[g].nextIncome = NowMs() + IncomeEvery(g);
         g_host[g].nextAiMs = NowMs() + (uint64_t)RandInt(60, 120) * 1000;
     }
+    // squares only for the war's territories (the new game's own radar modes of other zones off)
+    for (int i = 0, n = std::clamp<int>(Ref<int16_t>(0xBA1DE8), 0, 380); i < n; ++i)  // CTheZones::TotalNumberOfZoneInfos
+        if (std::find(zones.begin(), zones.end(), (uint16_t)i) == zones.end()) {
+            uint8_t* z = (uint8_t*)(0xBA1DF0 + (uintptr_t)i * 0x11);
+            z[0x0F] &= (uint8_t)~0x60;
+        }
     CountZones();
-    Ref<uint8_t>(0x96AB90) = 1;  // CGangWars::bGangWarsActive: the radar shows the territories
-    Ref<uint8_t>(0x96AB91) = 1;  // bTrainingMission (with no zones of its own): the engine starts no war by itself
+    KeepGangWarStatics();
     g_hostStarted = true;
     g_over = false;
     uint32_t seconds = Rules().rule == WIN_TIME ? (uint32_t)Rules().minutes * 60 : 0;
@@ -652,7 +739,7 @@ int MakeMan(int gang, const CVector& at, int car, int seat) {  // seat: -2 on fo
     Cmd(0x087E).I(h).I(0).Run();                       // SET_CHAR_DROPS_WEAPONS_WHEN_DEAD: none
     Cmd(0x060B).I(h).I(65542).Run();                   // SET_CHAR_DECISION_MAKER "Empty": no running off
     if (CPed* p = GetPed(h)) {
-        p->Armour() = (float)f.armour;
+        p->Armour() = (State(gang).flags & F_ARMOUR) ? 100.0f : (float)f.armour;
         Peds::Instance().Share(p);
     }
     return h;
@@ -665,6 +752,7 @@ void EndCapt(bool won) {
         CountZones();
         SendEvent(EV_CAPT_WON, g_capt.att, g_capt.def, g_capt.zone);
     } else {
+        SetFlashing(g_capt.zone, false);
         SendEvent(EV_CAPT_LOST, g_capt.att, g_capt.def, g_capt.zone);
     }
     for (CPed* p : g_capt.attackers)
@@ -675,6 +763,7 @@ void EndCapt(bool won) {
         if (GetVehicle(c)) Cmd(0x01C3).I(c).Run();  // MARK_CAR_AS_NO_LONGER_NEEDED
     Send(OP_CAPT, [](Writer& w) { w.U8(0); });
     radar::RemoveIcon(9800);
+    g_captView = CaptView{};
     LOGI("Gang war: the attack of %s on zone %d %s", Info(g_capt.att).name[1], g_capt.zone, won ? "took it" : "failed");
     g_capt = Capt{};
 }
@@ -738,6 +827,7 @@ bool StartCapt(uint8_t gang, int zone) {
     }
     SpawnDefenders(g_capt.def == VAGOS ? 8 : 6);
     radar::SetIcon(9800, g_capt.mid, 19 /* ENEMYATTACK */);
+    SetFlashing(zone, true);
     SendEvent(EV_CAPT_START, gang, g_capt.def, zone);
     LOGI("Gang war: %s attack zone %d (%s) with %d cars", gi.name[1], zone, TerritoryName(zone).c_str(), (int)g_capt.cars.size());
     return true;
@@ -807,6 +897,8 @@ void UpdateCapt() {
     } else {
         g_capt.holdSince = 0;
     }
+    g_captView.on = true, g_captView.att = g_capt.att, g_captView.def = g_capt.def, g_captView.zone = g_capt.zone;
+    g_captView.defLeft = (uint8_t)std::min(defLeft, 255), g_captView.attLeft = (uint8_t)std::min(attLeft, 255), g_captView.mid = g_capt.mid;
     static uint64_t sentMs = 0;
     if (now - sentMs > 2000) {
         sentMs = now;
@@ -848,6 +940,7 @@ void HostBuy(uint8_t player, uint8_t gang, uint8_t item, int zone) {
         if (item == IT_CAPT && g_capt.on) return deny(CAPT_ON);
         if (item == IT_BRIBE && OwnerOf(zone) >= kGangs) return deny(NO_ZONE);
     }
+    if (item == IT_ARMOUR && (st.flags & F_ARMOUR)) return deny(HAVE_IT);
     if (item == IT_PRODUCTION && (st.flags & F_PRODUCTION)) return deny(HAVE_IT);
     if (item == IT_QUALITY && (st.flags & F_QUALITY)) return deny(HAVE_IT);
     switch (item) {
@@ -855,7 +948,12 @@ void HostBuy(uint8_t player, uint8_t gang, uint8_t item, int zone) {
             if (!StartCapt(gang, zone)) return;
             ++st.capts;
             break;
-        case IT_ARMOUR:
+        case IT_ARMOUR:  // for good: now, at every start of its players (UpdatePlayer) and on all its men
+            st.flags |= F_ARMOUR;
+            for (CPed* p : g_capt.attackers)
+                if (Alive(p) && g_capt.att == gang) p->Armour() = 100.0f;
+            for (CPed* p : g_capt.defenders)
+                if (Alive(p) && g_capt.def == gang) p->Armour() = 100.0f;
             for (auto& [id, peer] : Net().Peers())
                 if (GangOf(id) == gang) Send(OP_GIFT, [](Writer& w) { w.U8(GIFT_ARMOUR); }, id);
             if (MyGang() == gang)
@@ -879,6 +977,7 @@ void UpdateAi(int g) {
     hg.nextAiMs = NowMs() + (uint64_t)RandInt(40, 90) * 1000;
     if (!(st.flags & F_PRODUCTION) && st.bank >= Price(g, IT_PRODUCTION) + 500) return HostBuy(NONE, (uint8_t)g, IT_PRODUCTION, -1);
     if (!(st.flags & F_QUALITY) && st.bank >= Price(g, IT_QUALITY) + 500) return HostBuy(NONE, (uint8_t)g, IT_QUALITY, -1);
+    if (!(st.flags & F_ARMOUR) && st.bank >= Price(g, IT_ARMOUR) + 600) return HostBuy(NONE, (uint8_t)g, IT_ARMOUR, -1);
     if (g_capt.on || st.bank < Price(g, IT_CAPT) || RandInt(0, 99) < 35) return;
     std::vector<int> mine = ZonesOf(g);
     std::vector<CVector> from;
@@ -910,6 +1009,7 @@ void EndConvoy(bool told) {
     g_convoy.nextMs = NowMs() + (uint64_t)RandInt(12, 16) * kMin;
     Send(OP_CONVOY, [](Writer& w) { w.U8(0); });
     radar::RemoveIcon(9801);
+    g_convoyOn = false;
     if (told) SendEvent(EV_CONVOY_GONE);
 }
 
@@ -952,6 +1052,7 @@ void UpdateConvoy() {
     if (!nv || !Vehicles::Alive(*nv) || nv->veh->Status() == 5 /* wrecked */ || now > g_convoy.until) return EndConvoy(true);
     CVector at = nv->veh->GetPosition();
     radar::SetIcon(9801, at, 51 /* the truck's: RADAR_SPRITE_TRUCK */);
+    g_convoyOn = true, g_convoyAt = at;
     static uint64_t sentMs = 0;
     if (now - sentMs > 1000) {
         sentMs = now;
@@ -1084,15 +1185,6 @@ void UpdateHost() {
 }
 
 // ---------------------------------------------------------------- every game: messages, the screen, the menu
-struct CaptView {
-    bool on = false;
-    uint8_t att = NONE, def = NONE, defLeft = 0, attLeft = 0;
-    int zone = -1;
-    CVector mid;
-} g_captView;
-bool g_convoyOn = false;
-CVector g_convoyAt;
-
 void HandleFeature(uint8_t from, uint8_t op, Reader& r) {
     bool fromHost = from == Net().HostId();
     if (op == OP_BUY) {
@@ -1175,15 +1267,33 @@ void DrawHud() {
         g.Text(ui::FONT_SMALL, x, y, l, 0xE0FFFFFF, ui::TEXT_RIGHT | ui::TEXT_OUTLINE);
         y += lh;
     }
+    // the lines at the top of the screen, as the arena's countdown: an attack, the convoy and how far it is
+    float top = 14 * s;
     if (g_captView.on) {
         std::string line = Format(TR("КАПТ · %s → «%s» · защитников %d · атакующих %d", "ATTACK · %s → %s · defenders %d · attackers %d"),
                                   ShortName(g_captView.att).c_str(), TerritoryName(g_captView.zone).c_str(), g_captView.defLeft,
                                   g_captView.attLeft);
-        g.Text(ui::FONT_NORMAL, W * 0.5f, 14 * s, line, g_captView.att < kGangs ? Info(g_captView.att).argb : 0xFFFFD060,
+        g.Text(ui::FONT_NORMAL, W * 0.5f, top, line, g_captView.att < kGangs ? Info(g_captView.att).argb : 0xFFFFD060,
                ui::TEXT_CENTER | ui::TEXT_OUTLINE);
+        top += g.LineHeight(ui::FONT_NORMAL);
         ui::DrawWorldMarks({g_captView.mid}, 0xC0FF5050, 2.0f, 0.8f);
     }
-    if (g_convoyOn) ui::DrawWorldMarks({g_convoyAt}, 0xC0F0D030, 3.0f, 0.9f);
+    if (g_convoyOn) {
+        CPlayerPed* me = FindPlayerPed(0);
+        CVehicle* in = me ? me->VehicleIfIn() : nullptr;
+        bool driving = in && in->ModelIndex() == MODEL_BARRACKS && (in->GetPosition() - g_convoyAt).Length() < 15.0f;
+        std::string line;
+        if (driving) {
+            int toBase = me ? (int)(me->GetPosition() - gi.base).Length2D() : 0;
+            line = Format(TR("ВОЕННЫЙ КОНВОЙ · вы за рулём · до базы %d м", "MILITARY CONVOY · you drive it · %d m to the base"), toBase);
+        } else {
+            int away = me ? (int)(me->GetPosition() - g_convoyAt).Length2D() : 0;
+            line = Format(TR("ВОЕННЫЙ КОНВОЙ · %d м · угоните грузовик на базу", "MILITARY CONVOY · %d m · take its truck to your base"), away);
+        }
+        g.Text(ui::FONT_NORMAL, W * 0.5f, top, line, 0xFFF0D030, ui::TEXT_CENTER | ui::TEXT_OUTLINE);
+        if (!driving) ui::DrawWorldMarks({g_convoyAt}, 0xC0F0D030, 3.0f, 0.9f);
+        else ui::DrawWorldMarks({gi.base}, ui::WithAlpha(gi.argb, 0.75f), 2.0f, 1.0f);
+    }
 }
 
 void DrawMenu() {
@@ -1201,7 +1311,8 @@ void DrawMenu() {
     g.Text(ui::FONT_NORMAL, cx, cy, Format(TR("В банке банды: $%d", "The gang's money: $%d"), State(gang).bank), 0xFF7FE07F, ui::TEXT_SHADOW);
     cy += lh + 8 * s;
     for (int i = IT_CAPT; i <= IT_QUALITY; ++i) {
-        bool have = (i == IT_PRODUCTION && (State(gang).flags & F_PRODUCTION)) || (i == IT_QUALITY && (State(gang).flags & F_QUALITY));
+        uint8_t fl = State(gang).flags;
+        bool have = (i == IT_ARMOUR && (fl & F_ARMOUR)) || (i == IT_PRODUCTION && (fl & F_PRODUCTION)) || (i == IT_QUALITY && (fl & F_QUALITY));
         int price = Price(gang, (Item)i);
         bool can = !have && State(gang).bank >= price;
         std::string line = Format("%d  %s — %s", i, kItemNames[i][Lang()], have ? TR("куплено", "bought") : Format("$%d", price).c_str());
@@ -1213,13 +1324,48 @@ void DrawMenu() {
     g.Text(ui::FONT_SMALL, cx, cy, TR("Цифра — купить, F5 или Esc — закрыть", "A digit buys, F5 or Esc closes"), 0xFFACCBF1, ui::TEXT_SHADOW);
 }
 
+// ---------------------------------------------------------------- the engine's own, in this mode
+// CGangWars::Update: the story's wars (gangs attacking the player's territories, its offensives) and their end, which
+// gives every zone the colours of the story's three gangs again: not in this mode, the war is ours
+using VoidFn = void(__cdecl*)();
+VoidFn g_origWarsUpdate = nullptr;
+void __cdecl HookGangWarsUpdate() {
+    if (On() && Started()) return;
+    g_origWarsUpdate();
+}
+// CTheZones::FillZonesWithGangColours: the squares' colours from the gangs' densities, the Ballas, Grove Street and the
+// Vagos only (the Aztecas' territories went blank): the war colours its own (SetOwner)
+using FillFn = void(__cdecl*)(bool);
+FillFn g_origFill = nullptr;
+void __cdecl HookFillZones(bool disable) {
+    if (On() && Started()) return;
+    g_origFill(disable);
+}
+// CDarkel::RegisterKillByPlayer: a passer-by killed by this game's player pays $50-150 (in tens)
+using KillFn = void(__cdecl*)(CPed*, int, bool, int);
+KillFn g_origKill = nullptr;
+void __cdecl HookKillByPlayer(CPed* ped, int weapon, bool headshot, int player) {
+    g_origKill(ped, weapon, headshot, player);
+    if (!On() || !Started() || player != 0 || !ped || ped->IsPlayer() || Players::Instance().FindByPed(ped)) return;
+    int type = ped->PedType();
+    if (type != 4 && type != 5) return;  // PED_TYPE_CIVMALE, PED_TYPE_CIVFEMALE: the people of the street
+    int money = RandInt(5, 15) * 10;
+    Cmd(0x0109).I(0).I(money).Run();  // ADD_SCORE
+}
+
 class GangWar : public Module {
 public:
     const char* Name() const override { return "GangWar"; }
-    void OnInstallHooks() override { SetHandler(&HandleFeature); }
+    void OnInstallHooks() override {
+        SetHandler(&HandleFeature);
+        mem::HookFn(0x446610, &HookGangWarsUpdate, &g_origWarsUpdate, "CGangWars::Update");
+        mem::HookFn(0x572440, &HookFillZones, &g_origFill, "CTheZones::FillZonesWithGangColours");
+        mem::HookFn(0x43DCD0, &HookKillByPlayer, &g_origKill, "CDarkel::RegisterKillByPlayer");
+    }
     void OnGameStarted() override {
         g_entered = false, g_wasDead = false, g_kitLevel = 0;
         g_specialsLoaded = false;
+        g_armoured.clear();
     }
     void OnSessionEnd() override {
         g_entered = g_menu = false;

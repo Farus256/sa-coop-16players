@@ -237,8 +237,19 @@ void ShutDoors(bool shut) {
         std::memcpy(name, (const void*)e, 8);  // CEntryExit::m_szName
         if (name[0]) names.insert(name);
     }
-    for (const std::string& n : names) Cmd(0x07FB).S8(n.c_str()).I(0).Run();  // SET_INTERIOR_ACCESS: off
-    LOGI("Arena: %d doors of the place shut", (int)names.size());
+    // SET_INTERIOR_ACCESS's own work, by hand: each door of those names, both sides, bEnableAccess off (+0x30, 0x4000;
+    // the marker and the way through go). The opcode took the name as 8 bytes without an end, unsafe for 8 letters.
+    int closed = 0;
+    for (int i = 0; i < pool->size; ++i) {
+        if (pool->byteMap[i] < 0) continue;
+        uintptr_t e = (uintptr_t)pool->objects + (uintptr_t)i * 0x3C;
+        char name[9] = {};
+        std::memcpy(name, (const void*)e, 8);
+        if (!name[0] || !names.count(name)) continue;
+        Ref<uint16_t>(e + 0x30) &= (uint16_t)~0x4000;
+        ++closed;
+    }
+    LOGI("Arena: %d doors of the place shut (%d entrances)", (int)names.size(), closed);
 }
 
 // The police's and the SWAT's knifeman is Cerberus (Manhunt) when the game has his model: cerberus.dff and .txd in

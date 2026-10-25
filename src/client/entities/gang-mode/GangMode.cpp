@@ -1,6 +1,7 @@
 #include "entities/gang-mode/GangMode.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 
@@ -205,6 +206,12 @@ bool Enemies(uint8_t a, uint8_t b) {
     uint8_t ga = GangOf(a), gb = GangOf(b);
     return ga != NONE && gb != NONE && ga != gb;
 }
+CVector BaseSpot(uint8_t player) {  // a little apart for each of its players
+    uint8_t gang = GangOf(player);
+    if (gang >= kGangs) return CVector{};
+    float a = (float)player * 1.1f;
+    return Info(gang).base + CVector{std::cos(a) * 2.0f, std::sin(a) * 2.0f, 0.0f};
+}
 int PlayersOf(int gang) {
     int n = 0;
     for (auto& [id, g] : g_picks) n += g == gang;
@@ -258,6 +265,11 @@ uint8_t OwnerOf(int zoneInfo) {
         if (z[Info(g).density] > bestD) bestD = z[Info(g).density], best = (uint8_t)g;
     return best;
 }
+// CZoneInfo +0x0F: the population type (5 bits), the radar mode (2 bits: 0 none, 1 the gang's colour, 2 flashing),
+// no cops (1 bit). The radar and the map draw a zone's square in its colour when its mode is not 0
+// (CRadar::DrawRadarGangOverlay, with CGangWars::bGangWarsActive and no training mission: GangWar sets them).
+static void SetRadarMode(uint8_t* z, int mode) { z[0x0F] = (uint8_t)((z[0x0F] & ~0x60) | ((mode & 3) << 5)); }
+
 void SetOwner(int zoneInfo, uint8_t gang) {
     if (zoneInfo < 0 || zoneInfo >= 380) return;
     uint8_t* z = ZoneInfo(zoneInfo);
@@ -266,10 +278,21 @@ void SetOwner(int zoneInfo, uint8_t gang) {
     strength = std::clamp(strength, 20, 45);
     if (gang < kGangs) {
         z[Info(gang).density] = (uint8_t)strength;
-        z[0x0B] = Info(gang).r, z[0x0C] = Info(gang).g, z[0x0D] = Info(gang).b, z[0x0E] = 0x78;  // CZoneInfo::ZoneColour
+        z[0x0B] = Info(gang).r, z[0x0C] = Info(gang).g, z[0x0D] = Info(gang).b, z[0x0E] = 0x80;  // CZoneInfo::ZoneColour
+        SetRadarMode(z, 1);
     } else {
         z[0x0B] = z[0x0C] = z[0x0D] = z[0x0E] = 0;
+        SetRadarMode(z, 0);
     }
+}
+
+void SetFlashing(int zoneInfo, bool on) {
+    if (zoneInfo < 0 || zoneInfo >= 380) return;
+    uint8_t* z = ZoneInfo(zoneInfo);
+    bool owned = OwnerOf(zoneInfo) < kGangs;
+    if (!owned && on) z[0x0B] = z[0x0C] = z[0x0D] = 0xE0, z[0x0E] = 0x80;  // a free one flashes white
+    if (!owned && !on) z[0x0B] = z[0x0C] = z[0x0D] = z[0x0E] = 0;
+    SetRadarMode(z, on ? 2 : owned ? 1 : 0);
 }
 
 int TerritoryAt(const CVector& at) {

@@ -240,18 +240,22 @@ A mode of its own that the host picks when it creates the server (F9 → "Mode: 
 everyone starts a new game with no prologue and no missions, with Los Santos's territories as a new game has them.
 In the lobby each one clicks its gang: Grove Street Families, the Ballas, Los Santos Vagos or Varrios Los Aztecas
 (a gang can have several players, the first of them its leader). A gang nobody plays is left to the computer or
-left out (its territories are free then), as the host sets it in the lobby. There the host also picks the win: every
+left out (its territories are free then), as the host sets it in the lobby with the "Bot: ON / OFF" button on each
+gang's card. There the host also picks the win: every
 territory, a number of them, or the most of them when the time is up.
 
 The players come in at their gang's base in its clothes (the leader as Sweet, Big Smoke, Ryder or Cesar) with its
-weapons, and come back there after a death. Their own gang's people on the street respect them, the others hate them,
-and players of different gangs hurt each other. The streets have far fewer people and cars. Every gang makes $200 of
+weapons, and come back there after every death or arrest, not at a hospital. Their own gang's people on the street
+respect them, the others hate them, and players of different gangs hurt each other. The territories are painted in
+their owners' colours on the map and the radar as in the story (one under attack flashes), and the whole map is known
+from the start. People and cars on the streets are rare, a passer-by killed pays $50 to $150, and there are no doors
+with yellow markers (barbers, clothes shops and the rest) and no weapons lying about the city. Every gang makes $200 of
 goods every 6 minutes; the money is the gang's, and any of its players spends it in the F5 menu (or `/gang`):
 
 | Purchase | Price | What it does |
 |---|---|---|
 | Attack a territory | $500 | 4 cars of your men drive to the territory you stand in; the owners defend in two waves, it is yours when they are down and some of yours still stand there |
-| Body armour | $200 | armour for all the gang's players |
+| Body armour | $200 | bought once and for good: armour for the gang's players at every start and for all its men, now and later |
 | Bribe the police | $550 | the police hunt the gang of the territory you stand in for 5 minutes |
 | Faster goods | $1000 | the goods are made faster |
 | Dearer goods | $1000 ($2000 after faster goods) | the goods sell for twice as much |
@@ -264,7 +268,8 @@ and aim. **The Aztecas**: the best shots, they come to an attack on bikes, two o
 
 The gangs' weapons go up by levels (three for the Ballas, four for the others): from a pistol or a Desert Eagle to
 the AK-47, the M4, the MP5, grenades and Molotov cocktails. Now and then a military convoy turns up in the city: the
-gang whose player drives its truck to the gang's base gets the next level. A gang with no territory is out. Deals
+gang whose player drives its truck to the gang's base gets the next level; the top of the screen says how far it is
+(and, at its wheel, how far the base is). A gang with no territory is out. Deals
 cut off, contraband, the San Fierro and Las Venturas modes and C.R.A.S.H. come later.
 
 ### Russian and English

@@ -36,6 +36,7 @@ enum GangFlags : uint8_t {
     F_OUT = 8,         // the gang is out of the war (no territory left)
     F_PLAYED = 16,     // in the war (a player's or the computer's)
     F_AI = 32,         // the computer plays it
+    F_ARMOUR = 64,     // its body armour bought: for good, for its players at every start and all its men
 };
 struct GangState {
     int32_t bank = 0;
@@ -77,6 +78,7 @@ uint8_t MyGang();
 bool Leader(uint8_t player);       // the first of its gang (the lowest player number)
 bool Enemies(uint8_t a, uint8_t b);  // two players of different gangs (they hurt each other)
 int PlayersOf(int gang);
+game::CVector BaseSpot(uint8_t player);  // where that player comes into the war and back after every death: its base
 void Pick(uint8_t gang);           // this player's choice in the lobby
 void HostAssign(uint8_t player, uint8_t gang);  // host
 void SendRoster();                 // host: the picks and the settings to everyone
@@ -86,7 +88,9 @@ void SendState();                  // host
 const std::vector<uint16_t>& Territories();
 void SetTerritories(const std::vector<uint16_t>& zones);  // host
 uint8_t OwnerOf(int zoneInfo);                 // by its gangs' densities: the strongest of the four, or NONE
-void SetOwner(int zoneInfo, uint8_t gang);     // host: its densities and its colour (Zones takes it to the others)
+// host: its densities, its colour and its square on the map and radar as in the story (Zones takes it to the others)
+void SetOwner(int zoneInfo, uint8_t gang);
+void SetFlashing(int zoneInfo, bool on);       // host: its square flashes while it is attacked
 int TerritoryAt(const game::CVector& at);      // the territory there (a zone info of the list), -1: none
 game::CVector TerritoryMiddle(int zoneInfo);   // the middle of its navigation zones
 std::string TerritoryName(int zoneInfo);       // its district's name as the map shows it
