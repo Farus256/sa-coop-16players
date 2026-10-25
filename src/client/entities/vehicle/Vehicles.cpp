@@ -38,6 +38,13 @@ constexpr float kTrafficOut = 220.0f;  // and dropped from the network beyond th
 constexpr float kMirrorIn = 190.0f, kMirrorOut = 250.0f;
 constexpr float kSyncRange = 300.0f;  // the owner sends an empty vehicle's state to the players this near (> kMirrorOut)
 constexpr uint8_t kOrphan = 0xFE;     // its owner left: the nearest player that has it takes it
+constexpr uintptr_t kIgnoreEntity = 0xB7CD68;  // CWorld::pIgnoreEntity: a line of sight passes through it
+constexpr int kIgnoredCollision = 0x128;       // CPhysical::m_pEntityIgnoredCollision
+
+struct ColPoint {
+    CVector point;
+    uint8_t rest[0x2C - 12];
+};
 constexpr uint64_t kOrphanMs = 3000;  // ... or it goes from the games after this
 
 void SetVehicleCreatedBy(CVehicle* v, uint8_t by) { CallMethod<0x6D5D70>(v, (int)by); }  // keeps CCarCtrl counters right
@@ -1030,6 +1037,29 @@ void Vehicles::ApplyMirror(NetVehicle& nv, float dt) {
         bool found = false;
         Call<0x5696C0, float>(target.x, target.y, target.z + 2.0f, &found, (CEntity**)nullptr);  // FindGroundZFor3DCoord
         nv.groundless = !found;
+    }
+    // Held up above its owner's car while that one stays level: it stands on something only this game has there (a car
+    // the owner's mission had moved away, an object). The lowrider contest of "Cesar Vialpando" kept the host's car
+    // 1-3 m up in the partner's game, sent down at 4 m/s every frame and never getting there. It goes through what is
+    // under it (the game lets them collide again once they part).
+    bool heldUp = !nv.groundless && dist < 10.0f && cur.z - target.z > 0.5f && std::fabs(st.vel.z) < 1.0f;
+    nv.aboveSinceMs = heldUp ? (nv.aboveSinceMs ? nv.aboveSinceMs : NowMs()) : 0;
+    if (heldUp && NowMs() - nv.aboveSinceMs > 500) {
+        nv.aboveSinceMs = NowMs();
+        ColPoint cp{};
+        CEntity* under = nullptr;
+        CVector down = cur - CVector{0.0f, 0.0f, 3.0f};
+        Ref<CEntity*>(kIgnoreEntity) = v;
+        bool hit = Call<0x56BA00, bool>(&cur, &down, &cp, &under, false, true, false, true, false, false, false, false);  // ProcessLineOfSight
+        Ref<CEntity*>(kIgnoreEntity) = nullptr;
+        if (hit && under && under != v && (under->IsVehicle() || under->IsObject())) {
+            Field<CEntity*>(v, kIgnoredCollision) = under;
+            if (under != nv.goneThrough) {
+                nv.goneThrough = under;
+                LOGI("Vehicle %04X stood %.1f m above its owner's on a %s (model %d) that is not there in its game: through it",
+                     nv.netId, cur.z - target.z, under->IsVehicle() ? "vehicle" : "object", under->ModelIndex());
+            }
+        }
     }
     if (nv.groundless) {
         SetVehicleMatrix(v, target, targetRot);
