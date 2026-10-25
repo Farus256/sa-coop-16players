@@ -49,8 +49,12 @@ It is based on the original 0.2.7 and keeps everything from it. Added:
   back in its first-person view, the aiming mod (imCamAim) keeps out of its way, and it no longer says "unknown game
   version"; the host can turn cheat codes off for everyone (`/cheats off`)
 - the mouse in the chat: the wheel scrolls its history, the mouse picks messages, `Ctrl+C` copies them
+- a "Gang war" mode in Los Santos: four gangs of players and the computer, money, attacks on territories, purchases
+  and a win by the host's rules
 - the original SA:COOP 0.3.0's changes: side jobs together, the other player's moves, the firewall prompt, mission
-  start points and map changes of the host's missions, and its fixes
+  start points and map changes of the host's missions, and its fixes; from 0.3.1: the engine's scenes with the same
+  camera, the lowriders and the beach dance for two, "Home Invasion" together, a partner can start a mission, shared
+  skills and stats, the partner's own gang wars, vehicles for the partner, a gamepad passenger
 - Linux and macOS builds, server tests
 
 Not compatible with the original 0.2.x versions, everyone has to update. Playing with three or more people has
@@ -229,6 +233,39 @@ Weapons and body armour lie all over the place before each wave, the first one t
 A win pays everyone $1000 a wave, then takes everyone back where it stood. Everyone dead
 or gone: lost. `/arena stop` ends it. Offline, one can play an arena alone.
 
+### Gang war (Los Santos)
+
+A mode of its own that the host picks when it creates the server (F9 → "Mode: Gang war: LS"). Instead of the story,
+everyone starts a new game with no prologue and no missions, with Los Santos's territories as a new game has them.
+In the lobby each one clicks its gang: Grove Street Families, the Ballas, Los Santos Vagos or Varrios Los Aztecas
+(a gang can have several players, the first of them its leader). A gang nobody plays is left to the computer or
+left out (its territories are free then), as the host sets it in the lobby. There the host also picks the win: every
+territory, a number of them, or the most of them when the time is up.
+
+The players come in at their gang's base in its clothes (the leader as Sweet, Big Smoke, Ryder or Cesar) with its
+weapons, and come back there after a death. Their own gang's people on the street respect them, the others hate them,
+and players of different gangs hurt each other. The streets have far fewer people and cars. Every gang makes $200 of
+goods every 6 minutes; the money is the gang's, and any of its players spends it in the F5 menu (or `/gang`):
+
+| Purchase | Price | What it does |
+|---|---|---|
+| Attack a territory | $500 | 4 cars of your men drive to the territory you stand in; the owners defend in two waves, it is yours when they are down and some of yours still stand there |
+| Body armour | $200 | armour for all the gang's players |
+| Bribe the police | $550 | the police hunt the gang of the territory you stand in for 5 minutes |
+| Faster goods | $1000 | the goods are made faster |
+| Dearer goods | $1000 ($2000 after faster goods) | the goods sell for twice as much |
+
+The gangs' own. **Grove Street**: its first 4 attacks cost $150 (3 cars), the police bribe $700, and Emmet gives
+armour for free, and once a weapons upgrade. **The Ballas**: the police bribe $350, they take protection money from the
+24/7s, bars and clubs in their territories (+$50 each with the goods), but the more goods they sold, the worse their
+men aim. **The Vagos**: faster goods $600, dearer goods $1000, their goods sell faster, more men but with little health
+and aim. **The Aztecas**: the best shots, they come to an attack on bikes, two on each, shooting from them.
+
+The gangs' weapons go up by levels (three for the Ballas, four for the others): from a pistol or a Desert Eagle to
+the AK-47, the M4, the MP5, grenades and Molotov cocktails. Now and then a military convoy turns up in the city: the
+gang whose player drives its truck to the gang's base gets the next level. A gang with no territory is out. Deals
+cut off, contraband, the San Fierro and Las Venturas modes and C.R.A.S.H. come later.
+
 ### Russian and English
 
 The SA:COOP window, the chat and the hints come in Russian and English. The language switch is at the top of the
@@ -326,6 +363,7 @@ Chat commands:
 | `/tanks` | host: a tank battle; `/tanks join` joins it, `/tanks stop` ends it |
 | `/arena` | host: a ground battle, `/arena yakuza random 5`; `/arena list` lists, `/arena stop` ends it |
 | `/skip` | the arena: start the next wave now |
+| `/gang`, F5 | the gang war: the gang's menu |
 | `/cheats off`, `/cheats on` | host: turn cheat codes off or on for everyone |
 | `/sync` | the sync's state: ping, the delay to each player, how many people and cars your game runs |
 | `/code <cheat>` | enter a cheat, for example `/code HESOYAM` |

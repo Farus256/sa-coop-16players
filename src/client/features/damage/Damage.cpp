@@ -26,6 +26,7 @@
 #include "common/api/protocol/Protocol.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
+#include "entities/gang-mode/GangMode.h"
 #include "entities/ped/Peds.h"
 #include "entities/player/Players.h"
 #include "entities/vehicle/Vehicles.h"
@@ -127,6 +128,15 @@ bool IsRemotePlayerEntity(CEntity* e) {
     return ped && Players::Instance().FindByPed(ped);
 }
 
+// Friendly fire, or (the gang war) a player of another gang: the other player's hits count
+bool PlayerHurts(CEntity* e) {
+    if (Net().FriendlyFire()) return true;
+    CPed* ped = e ? (e->IsPed() ? (CPed*)e : DriverOf(e)) : nullptr;
+    RemotePlayer* rp = ped ? Players::Instance().FindByPed(ped) : nullptr;
+    return rp && gangmode::Enemies(Net().MyId(), rp->id);
+}
+bool PlayerHurts(uint8_t id) { return Net().FriendlyFire() || gangmode::Enemies(Net().MyId(), id); }
+
 // the other player, its car, or a car or ped its game owns (a copy here)
 bool FromOtherSide(CEntity* e) {
     if (!e) return false;
@@ -168,7 +178,7 @@ bool __cdecl HookGenerateDamageEvent(CPed* victim, CEntity* creator, int weapon,
         if (cam::WideScreenOn() && FromOtherSide(creator)) return true;  // see the top of the file
         bool fromRemote = IsRemotePlayerEntity(creator);
         if (fromRemote && victim == FindPlayerPed(0))  // see the top of the file
-            return Net().FriendlyFire() && !IsDirect(weapon) ? g_origGenerateDamage(victim, creator, weapon, damage, piece, dir) : true;
+            return PlayerHurts(creator) && !IsDirect(weapon) ? g_origGenerateDamage(victim, creator, weapon, damage, piece, dir) : true;
         if (fromRemote && weapon == WEAPON_EXPLOSION) {  // see the top of the file
             NetPed* np = Peds::Instance().Find(victim);
             if ((np && np->owner != Net().MyId()) || Players::Instance().FindByPed(victim)) return true;
@@ -184,7 +194,7 @@ bool __cdecl HookGenerateDamageEvent(CPed* victim, CEntity* creator, int weapon,
                 LOGD("NPC %04X hit player %d: weapon %d, damage %d", attacker ? attacker->netId : 0, rp->id, weapon, damage);
                 return true;
             }
-            if (Net().FriendlyFire() && IsDirect(weapon) && IsLocalPlayerEntity(creator)) {
+            if (PlayerHurts(rp->id) && IsDirect(weapon) && IsLocalPlayerEntity(creator)) {
                 SendDamage(TARGET_PLAYER_BY_PLAYER, rp->id, 0, weapon, (float)damage, piece, dir, victim->GetPosition());
                 LOGI("Hit player %d: weapon %d, damage %d", rp->id, weapon, damage);
                 return true;
@@ -229,7 +239,7 @@ void __fastcall HookKillPedWithCar(CPed* ped, void* edx, CVehicle* car, float im
             auto busy = [&](int type) { return CallMethod<0x681740, void*>((uint8_t*)ped->Intelligence() + 4, type) != nullptr; };
             bool down = ped->Intelligence() && (busy(823) || busy(824) || busy(825) || busy(818) || busy(821) ||  // be dragged out
                                                 busy(205) || busy(208));                                          // get up
-            if (Net().FriendlyFire() && ped == FindPlayerPed(0) && !down) g_origKillWithCar(ped, edx, car, impulse, flag);
+            if (PlayerHurts(driver) && ped == FindPlayerPed(0) && !down) g_origKillWithCar(ped, edx, car, impulse, flag);
             return;
         }
         if (NetPed* np = Peds::Instance().Find(ped); np && np->owner != Net().MyId()) {
@@ -348,7 +358,7 @@ void HandleDamage(uint8_t from, Reader& r) {
             LOGD("Ped %04X of player %d hit our ped %04X: weapon %d, damage %.0f", by, from, netId, weapon, damage);
         }
     } else if (kind == TARGET_PLAYER_BY_PLAYER) {
-        if (!Net().FriendlyFire()) return;
+        if (!PlayerHurts(from)) return;
         {
             KeepWanted keep;
             g_origGenerateDamage(FindPlayerPed(0), attacker, weapon, (int)damage, piece, dir);
