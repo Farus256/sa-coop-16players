@@ -1,7 +1,7 @@
 // Gang territories follow the host. The host's game runs the gang wars and the story; whenever a territory's gangs,
 // colour or radar mode (flashing while it is attacked) change there, the partner's copy of that zone info changes too.
-// A war the partner provokes away from the host is fought in the partner's game (the engine ties a war to its own
-// player: the zone, the waves, their targets), and its outcome goes into the host's world (G_TURF_WAR).
+// The partner's game starts no war of its own (the original's 0.3.1 had one fought there away from the host,
+// G_TURF_WAR: left out in this fork).
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -143,30 +143,17 @@ std::string ZoneName(int zone) {  // the district's name as the map shows it (CT
 
 using VoidFn = void(__cdecl*)();
 VoidFn g_origOffensive = nullptr, g_origDefensive = nullptr;
-// The provocation (three gang kills) starts a war: the host's own, unless the partner fights one; the partner's own
-// when the host is not near (then it is the host's, fed by the partner's kills: GANG_KILL), on no story mission and
-// with no war of the host going on.
+// The provocation (three gang kills) starts a war: the host's own; the partner's game none.
 void __cdecl HookStartOffensiveGangWar() {
     if (!Net().Online()) return g_origOffensive();
     if (Net().IsHost()) {
         if (g_partnerWar.owner == 0xFF) return g_origOffensive();
-        Provocation() = 0.0f;  // one war at a time: the partner's is fought
+        Provocation() = 0.0f;  // one war at a time
         return;
     }
-    if (!(g_hostWarFlags & WAR_ALLOWED) || (g_hostWarFlags & (WAR_STORY | WAR_MISSION)) || NowMs() < g_otherWarUntil ||
-        HostWithin(100.0f) || HostMissionRecent(0) || !flow::InHostWorld()) {
-        Provocation() = 0.0f;  // what the engine does where no war can start
-        return;
-    }
-    g_origOffensive();
-    if (!WarState()) return;  // not a district to fight for
-    g_ownWar = {};
-    g_ownWar.owner = Net().MyId();
-    g_ownWar.zone = (int)((Ref<uintptr_t>(0x96AB8C) - kZoneInfos) / 0x11);  // pZoneInfoToFightOver
-    int nav = (int)((Ref<uintptr_t>(0x96AB88) - 0xBA3798) / 0x20);       // pZoneToFightOver
-    uint8_t gang = (uint8_t)Ref<int32_t>(0x96AB84);
-    SendTurf(TURF_START, g_ownWar.zone, [&](Writer& w) { w.U16((uint16_t)nav), w.U8(gang); });
-    LOGI("Our gang war for zone %d (gang %u) starts here", g_ownWar.zone, gang);
+    // The original's 0.3.1 let the partner fight a war of its own away from the host: not in this fork, the partner's
+    // game starts no war (its kills feed the host's provocation, GANG_KILL)
+    Provocation() = 0.0f;  // what the engine does where no war can start
 }
 // the host's district under attack waits while the partner's war is fought
 void __cdecl HookStartDefensiveGangWar() {

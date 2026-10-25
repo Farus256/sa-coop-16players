@@ -53,8 +53,9 @@ It is based on the original 0.2.7 and keeps everything from it. Added:
   and a win by the host's rules
 - the original SA:COOP 0.3.0's changes: side jobs together, the other player's moves, the firewall prompt, mission
   start points and map changes of the host's missions, and its fixes; from 0.3.1: the engine's scenes with the same
-  camera, the lowriders and the beach dance for two, "Home Invasion" together, a partner can start a mission, shared
-  skills and stats, the partner's own gang wars, vehicles for the partner, a gamepad passenger
+  camera, the lowriders and the beach dance for two, "Home Invasion" together, a partner can start a mission, vehicles
+  for the partner, a gamepad passenger (0.3.1's shared skills and the partner's own gang wars are left out: skills
+  and stats are each player's own, the host starts the wars)
 - Linux and macOS builds, server tests
 
 Not compatible with the original 0.2.x versions, everyone has to update. Playing with three or more people has

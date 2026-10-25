@@ -325,140 +325,16 @@ void MergeDoneFlags(const std::map<uint16_t, int32_t>& world) {
     WatchDone(true);
 }
 
-// ---------------------------------------------------------------- the stats tab, shared
-// Both players' stats tab goes on together: each game sends what changed in it every second, counters as amounts added
-// (distances, fares, kills, photos...), records as values (the higher, a best time or place the lower), and the host the
-// world's own. What each game counts by itself stays its own: the body and the gym, lungs, guns, money, dates, respect.
-// The skills hard to get (driving, flying, a bike, a bicycle, gambling) go to the better of the two.
-enum : uint8_t { R_ADD = 1, R_MAX = 2, R_MIN = 3, R_SET = 4 };
-struct StatRange {
-    uint16_t first, last;
-    uint8_t rule;
-};
-constexpr StatRange kSharedStats[] = {
-    {3, 9, R_ADD},       {26, 27, R_ADD},     {36, 36, R_ADD},     {41, 41, R_ADD},     {121, 132, R_ADD},  // distances, kills
-    {138, 138, R_ADD},   {149, 155, R_ADD},   {161, 163, R_ADD},   {166, 169, R_ADD},   {171, 171, R_ADD},  // jobs, gangs
-    {173, 173, R_ADD},   {177, 179, R_ADD},   {182, 183, R_ADD},   {191, 192, R_ADD},   {194, 197, R_ADD},
-    {201, 201, R_ADD},   {217, 218, R_ADD},   {234, 235, R_ADD},   {238, 240, R_ADD},
-    {2, 2, R_MAX},       {10, 12, R_MAX},     {17, 19, R_MAX},     {40, 40, R_MAX},     {51, 51, R_MAX},    // records
-    {81, 81, R_MAX},     {139, 143, R_MAX},   {157, 160, R_MAX},   {174, 175, R_MAX},   {205, 211, R_MAX},  // and skills
-    {215, 215, R_MAX},   {223, 223, R_MAX},   {229, 230, R_MAX},
-    {48, 49, R_MIN},     {172, 172, R_MIN},   {202, 202, R_MIN},   {212, 212, R_MIN},   {219, 222, R_MIN},  // best times
-    {246, 250, R_MIN},   {258, 301, R_MIN},
-    {0, 1, R_SET},       {146, 148, R_SET},   {180, 181, R_SET},   {302, 342, R_SET},  // the world's, host -> partner
-};
-uint8_t RuleOf(uint16_t id) {
-    for (const StatRange& r : kSharedStats)
-        if (id >= r.first && id <= r.last) return r.rule;
-    return 0;
-}
-uint32_t& StatBits(uint16_t id) {  // ids 0..81 are floats (StatTypesFloat), 120..342 ints
-    return Ref<uint32_t>(id < 82 ? kStatsBlock + kFloatStats + id * 4u : kStatsBlock + (id - 120u) * 4u);
-}
-double StatNum(uint16_t id, uint32_t bits) {
-    if (id >= 82) return (double)(int32_t)bits;
-    float f;
-    memcpy(&f, &bits, 4);
-    return f;
-}
-uint32_t StatBitsOf(uint16_t id, double v) {
-    if (id >= 82) return (uint32_t)(int32_t)std::llround(v);
-    float f = (float)v;
-    uint32_t b;
-    memcpy(&b, &f, 4);
-    return b;
-}
-
-struct StatEntry {
-    uint16_t id;
-    uint8_t rule;
-    uint32_t bits;
-};
-uint32_t g_statBase[343];  // the shared stats as last seen: what changed since goes out
-bool g_statBased = false;  // false: rebase first (a world loaded, a profile went on, a player came)
-std::vector<StatEntry> g_statQueue;  // arrived before this game could take them (a world loading, no profile yet)
-bool g_statAnswer = false;  // a full set came: ours goes back once we are ready
-
-template <typename F>
-void ForSharedStats(F f) {
-    for (const StatRange& r : kSharedStats)
-        for (uint16_t id = r.first; id <= r.last; ++id) f(id, r.rule);
-}
-
-void SendStats(uint8_t full, const std::vector<StatEntry>& out) {
-    for (size_t at = 0; at < out.size(); at += 200) {
-        size_t n = std::min<size_t>(200, out.size() - at);
-        Writer w(proto::G_STAT_SYNC);
-        w.U8(full);
-        w.U8((uint8_t)n);
-        for (size_t i = at; i < at + n; ++i) w.U16(out[i].id), w.U8(out[i].rule), w.U32(out[i].bits);
-        Net().Send(proto::CH_RELIABLE, w);
-    }
-}
-
-// all our records, skills and (the host) world stats: a newcomer takes the better ones
-void SendFullStats(uint8_t full) {
-    std::vector<StatEntry> out;
-    ForSharedStats([&](uint16_t id, uint8_t rule) {
-        if (rule == R_ADD || (rule == R_SET && !Net().IsHost())) return;
-        out.push_back({id, rule, StatBits(id)});
-    });
-    SendStats(full, out);
-}
-
-void ApplyStat(const StatEntry& e) {
-    uint32_t& cur = StatBits(e.id);
-    double a = StatNum(e.id, cur), b = StatNum(e.id, e.bits);
-    if (e.rule == R_ADD) {
-        b = std::clamp(b, 0.0, e.id < 82 ? 1e6 : 100000.0);
-        cur = StatBitsOf(e.id, a + b);
-        g_statBase[e.id] = StatBitsOf(e.id, StatNum(e.id, g_statBase[e.id]) + b);  // ours did not change: nothing goes back
-        return;
-    }
-    if (e.rule == R_MAX && b > a) cur = e.bits;
-    else if (e.rule == R_MIN && b > 0 && (a == 0 || b < a)) cur = e.bits;
-    else if (e.rule == R_SET && !Net().IsHost()) cur = e.bits;
-    g_statBase[e.id] = cur;
-}
-
-void HandleStatSync(uint8_t from, Reader& r) {
-    uint8_t full = r.U8();
-    std::vector<StatEntry> in(r.U8());
-    for (StatEntry& e : in) e.id = r.U16(), e.rule = r.U8(), e.bits = r.U32();
-    if (!r.Ok() || from == Net().MyId()) return;
-    for (const StatEntry& e : in) {
-        // only the listed stats with their own rule: the message comes from another game
-        if (e.id > 342 || (e.id >= 82 && e.id < 120) || RuleOf(e.id) != e.rule || (e.rule == R_SET && from != Net().HostId()))
-            continue;
-        if (g_statQueue.size() < 2000) g_statQueue.push_back(e);
-    }
-    if (full == 1) g_statAnswer = true;
-    LOGD("Shared stats: %zu from player %u%s", in.size(), from, full ? " (all records)" : "");
-}
-
-// every second, in the shared world (the partner: once its profile is on)
+// The original's 0.3.1 shared the stats tab and the hard skills (driving, flying, bikes) between the games: not in this
+// fork, each player's skills and stats are its own. What stays of it is the watch over the side jobs done (WatchDone),
+// once a second in the shared world (the partner: once its profile is on).
+bool g_statBased = false;  // false: start the watch over (a world loaded, a profile went on, a player came)
 void StatTick(bool ready) {
     if (!ready) return;
-    if (!g_statBased) {  // a load nobody's stats came from: taken as it is, then our records go out
-        ForSharedStats([](uint16_t id, uint8_t) { g_statBase[id] = StatBits(id); });
+    if (!g_statBased) {
         g_statBased = true;
-        SendFullStats(1);
         WatchDone(true);
     }
-    for (const StatEntry& e : g_statQueue) ApplyStat(e);
-    g_statQueue.clear();
-    if (g_statAnswer) g_statAnswer = false, SendFullStats(2);
-    std::vector<StatEntry> out;
-    ForSharedStats([&](uint16_t id, uint8_t rule) {
-        uint32_t cur = StatBits(id), &base = g_statBase[id];
-        if (cur == base || (rule == R_SET && !Net().IsHost())) return;
-        if (rule != R_ADD) out.push_back({id, rule, cur});
-        else if (double d = StatNum(id, cur) - StatNum(id, base); d > 0) out.push_back({id, rule, StatBitsOf(id, d)});
-        base = cur;  // a counter that went down (a fare folded into the odd jobs' total) only moves the base
-    });
-    // many at once is a world or a profile nobody announced: taken as it is
-    if (out.size() > 40) LOGI("Shared stats: %zu changed at once, taken as they are", out.size());
-    else SendStats(0, out);
     WatchDone(false);
 }
 
@@ -727,7 +603,6 @@ public:
         };
         Net().SetHandler(proto::G_PLAYER_LOOK, &HandleLook);
         Net().SetHandler(proto::G_PLAYER_STATS, &HandleStats);
-        Net().SetHandler(proto::G_STAT_SYNC, &HandleStatSync);
         Net().SetHandler(proto::G_SIDE_DONE, &HandleDone);
         Net().SetHandler(proto::G_HOST_SAVED, [](uint8_t from, Reader&) {
             if (from != Net().HostId() || Net().IsHost() || !Instance().m_applied || !core::IsPlayerReady()) return;
@@ -743,10 +618,8 @@ public:
         m_profile.clear();
         g_looks.clear();
         g_statBased = false;
-        g_statQueue.clear();
     }
     void OnSessionStart() override { g_statBased = false; }
-    void OnPeerJoin(uint8_t) override { g_statBased = false; }  // the newcomer gets our records and skills
     void OnGameStarted() override {  // a new world: the partner's profile goes on top again
         m_applied = false;
         g_statBased = false;
@@ -791,7 +664,7 @@ public:
             if (!g_lookOwn) memcpy(g_givenKeys, me->ClothesDesc(), sizeof g_givenKeys);
             m_saved = m_profile;
             m_lastSaveMs = now;
-            g_statBased = false;  // the profile's stats are ours: the shared ones start from them
+            g_statBased = false;  // the profile's on: the watch over the side jobs starts again
         }
 
         // the host's own pick in the lobby (to try the characters): on its CJ once its world is up
