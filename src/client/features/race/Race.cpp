@@ -145,7 +145,10 @@ void GiveCar(int model) {
     int self = GetPedRef(me);
     if (me->InVehicle()) Cmd(0x0362).I(self).F(p.x).F(p.y).F(p.z + 1.0f).Run();  // WARP_CHAR_FROM_CAR_TO_COORD
     Cmd(0x036A).I(self).I(car).Run();                                            // WARP_CHAR_INTO_CAR
-    Cmd(0x0373).Run();                                                           // SET_CAMERA_BEHIND_PLAYER
+    // The car camera follows the car it was set on until its mode changes (getting out, on foot): from the host's
+    // passenger seat straight to this wheel it stayed on the host's car. Set again as the game's scripts do after a warp.
+    Cmd(0x0373).Run();  // SET_CAMERA_BEHIND_PLAYER
+    Cmd(0x02EB).Run();  // RESTORE_CAMERA_JUMPCUT
     ui::TheChat().AddSystem(TR("Вы за рулём своей машины для гонки: точки хоста считаются и за вас.",
                                "You are at the wheel of your own car for the race: the host's checkpoints count for you too."));
     LOGI("Race: a car (model %d) for this player, seated in it", model);
