@@ -16,6 +16,7 @@
 #include "common/api/protocol/Protocol.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
+#include "entities/gang-mode/GangMode.h"
 #include "entities/mission/Mission.h"
 #include "entities/player/Players.h"
 #include "entities/vehicle/Vehicles.h"
@@ -963,6 +964,50 @@ void Peds::HandleOwner(uint8_t from, Reader& r) {
 constexpr int PED_TYPE_GANG2 = 8;
 constexpr uintptr_t kTargetedObject = 0x71C;  // CPed::m_pTargetedObject (the lock-on target)
 
+// The people a player recruits: Grove Street's, or in the gang war its own gang's
+static int RecruitType(uint8_t player) {
+    if (!gangmode::On()) return PED_TYPE_GANG2;
+    uint8_t g = gangmode::GangOf(player);
+    return g < gangmode::kGangs ? gangmode::Info(g).pedType : -1;
+}
+
+bool Peds::RecruitLocal() {
+    CPlayerPed* me = core::IsPlayerReady() ? FindPlayerPed(0) : nullptr;
+    int type = RecruitType(Net().MyId());
+    if (!me || me->InVehicle() || !gangmode::On() || type < 0) return false;
+    auto ours = [&](CPed* p) {
+        if (!p || p == me || !IsPedValid(p) || IsPedDead(p) || p->IsPlayer() || p->InVehicle() || p->PedType() != type ||
+            p->CreatedBy() == 2 /* PED_MISSION: an attack's, a guard */ || Players::Instance().FindByPed(p))
+            return false;
+        NetPed* np = Find(p);
+        return !np || np->owner == Net().MyId();
+    };
+    CPed* pick = nullptr;
+    if (auto* t = Field<CEntity*>(me, kTargetedObject); t && t->IsPed() && ours((CPed*)t)) pick = (CPed*)t;
+    if (!pick) {
+        float h = me->CurrentRotation(), bestD = 3.0f;
+        CVector fwd{-std::sin(h), std::cos(h), 0.0f};
+        CPoolHeader* pool = PedPool();
+        for (int i = 0; pool && i < pool->size; ++i) {
+            if (pool->byteMap[i] < 0) continue;
+            auto* p = (CPed*)(pool->objects + (size_t)i * kPedPoolElemSize);
+            if (!ours(p)) continue;
+            CVector d = p->GetPosition() - me->GetPosition();
+            float dist = d.Length();
+            if (dist < bestD && (d.x * fwd.x + d.y * fwd.y) > 0.3f * dist) bestD = dist, pick = p;
+        }
+    }
+    if (!pick) return false;
+    int32_t group = -1;
+    Cmd(0x07AF).I(0).Out(&group).Run();  // GET_PLAYER_GROUP
+    int h = GetPedRef(pick);
+    if (group < 0 || Cmd(0x06EE).I(h).I(group).Run()) return false;  // IS_GROUP_MEMBER: ours already
+    Cmd(0x0631).I(group).I(h).Run();  // SET_GROUP_MEMBER
+    ui::TheChat().AddSystem(TR("Кент из вашей банды теперь с вами.", "A homie of your gang is with you now."));
+    LOGI("Recruited our own ped %p of type %d", (void*)pick, type);
+    return true;
+}
+
 bool Peds::AskToRecruit() {
     CPlayerPed* me = core::IsPlayerReady() ? FindPlayerPed(0) : nullptr;
     if (!me || me->InVehicle() || !Net().Online()) return false;
@@ -980,7 +1025,7 @@ bool Peds::AskToRecruit() {
             if (dist < bestD && (d.x * fwd.x + d.y * fwd.y) > 0.3f * dist) bestD = dist, pick = &np;
         }
     }
-    if (!pick || pick->owner == Net().MyId() || pick->pedType != PED_TYPE_GANG2 || IsPedDead(pick->ped)) return false;
+    if (!pick || pick->owner == Net().MyId() || (int)pick->pedType != RecruitType(Net().MyId()) || IsPedDead(pick->ped)) return false;
     m_recruitAsks[pick->netId] = NowMs();
     Writer w(proto::G_PED_ASK);
     w.U16(pick->netId);
@@ -1000,7 +1045,7 @@ void Peds::HandleAsk(uint8_t from, Reader& r) {
     if (it == m_byId.end() || it->second.owner != Net().MyId() || !IsAlive(it->second)) return;
     NetPed& np = it->second;
     CPed* ped = np.ped;
-    if (IsPedDead(ped) || ped->InVehicle() || ped->CreatedBy() == 2 /* PED_MISSION */ || ped->PedType() != PED_TYPE_GANG2) return;
+    if (IsPedDead(ped) || ped->InVehicle() || ped->CreatedBy() == 2 /* PED_MISSION */ || ped->PedType() != RecruitType(from)) return;
     int32_t group = -1;
     Cmd(0x07AF).I(0).Out(&group).Run();  // GET_PLAYER_GROUP
     if (group >= 0 && Cmd(0x06EE).I(np.handle).I(group).Run()) {  // IS_GROUP_MEMBER: ours already
@@ -1017,7 +1062,8 @@ void Peds::Recruit(NetPed& np) {
     Cmd(0x07AF).I(0).Out(&group).Run();         // GET_PLAYER_GROUP
     if (group < 0) return;
     Cmd(0x0631).I(group).I(np.handle).Run();    // SET_GROUP_MEMBER
-    ui::TheChat().AddSystem(TR("Боец Grove Street теперь в вашей банде.", "A Grove Street homie is in your gang now."));
+    if (gangmode::On()) ui::TheChat().AddSystem(TR("Кент из вашей банды теперь с вами.", "A homie of your gang is with you now."));
+    else ui::TheChat().AddSystem(TR("Боец Grove Street теперь в вашей банде.", "A Grove Street homie is in your gang now."));
 }
 
 // ---- left behind when this game's player goes into an interior

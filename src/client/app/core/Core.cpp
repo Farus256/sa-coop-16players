@@ -456,6 +456,7 @@ bool OnKeyDown(int vk, bool repeat) {
         ui::SetConnectMenuVisible(true);
         return true;
     }
+    if (vk == VK_F1) return true;  // F1 is not the game's (nothing of it reaches the game)
     bool inMenu = game::MenuActive();
     if (vk == cfg.chatKey && !inMenu && (IsPlayerReady() || Net().Online()) && !typingCheat) {
         ui::TheChat().Open();
@@ -472,7 +473,7 @@ bool OnKeyDown(int vk, bool repeat) {
     if (vk == cfg.reviveKey && !inMenu && ReviveKeyPressed()) return true;  // otherwise E goes on (the next weapon)
     if (vk == cfg.passengerKey && !inMenu && IsPlayerReady()) {
         // a Grove Street member of another player's game in front: asked for, it joins this player's gang
-        if (!Peds::Instance().AskToRecruit()) Players::Instance().TryEnterAsPassenger();
+        if (!Peds::Instance().RecruitLocal() && !Peds::Instance().AskToRecruit()) Players::Instance().TryEnterAsPassenger();
         return false;  // G still reaches the game (gang recruiting)
     }
     return false;

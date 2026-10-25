@@ -137,6 +137,8 @@ public:
     // will not recruit): that game is asked to hand it over, and once it is this game's own it joins this player's
     // gang. True when such a ped was there to ask for.
     bool AskToRecruit();
+    // the gang war: one of this player's own gang's men of this game in front (locked on to, else within 3 m) joins it
+    bool RecruitLocal();
     // This game's player went into an interior (or out of one): the game drops its random people now
     // (CPopulation::RemoveAllRandomPeds), and its cars are left behind. Those near another player in the place left go
     // to that player's game instead, with whoever sits in them, so they do not vanish in front of it.

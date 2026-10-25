@@ -38,7 +38,7 @@ enum Outcome : uint8_t { GOING = 0, WON = 1, LOST = 2, LEFT = 3 };
 constexpr float kRunnerRange = 230.0f;   // a player this near the territory: its game fights the attack
 constexpr float kRunnerAway = 320.0f;    // ... and gives it up this far off
 constexpr uint64_t kNobodyMs = 150000;   // nobody came: the dice
-constexpr int kIconBase = 9800;
+constexpr int kIconBase = 9810;  // 9810-9811 (9801 is the convoy's)
 
 // ---------------------------------------------------------------- the host's
 struct HostCapt {

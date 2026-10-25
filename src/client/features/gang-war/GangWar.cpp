@@ -271,6 +271,9 @@ bool g_wasDead = false;
 uint64_t g_lookMs = 0, g_densityMs = 0, g_emmetAskMs = 0;
 bool g_specialsLoaded = false;
 bool g_menu = false;
+uint64_t g_landUntil = 0;  // just put at the base: kept from falling through ground not loaded yet
+uint64_t g_landLast = 0;   // ... 20 s at most
+bool g_heldUp = false;
 
 // A new game's prologue ("intro", a mission): ended as it begins, everything it took given back (control, the screen,
 // the radar), and the mission flag off (the story then never moves on: no mission markers)
@@ -299,6 +302,7 @@ void Teleport(int8_t area, const CVector& to, float heading) {
     if (CVehicle* in = me->VehicleIfIn()) Cmd(0x0362).I(h).F(in->GetPosition().x).F(in->GetPosition().y).F(in->GetPosition().z + 1.0f).Run();
     Cmd(0x04BB).I(area).Run();                         // SET_AREA_VISIBLE
     Cmd(0x0860).I(h).I(area).Run();                    // SET_CHAR_AREA_VISIBLE
+    Cmd(0x04E4).F(to.x).F(to.y).Run();                 // REQUEST_COLLISION
     Cmd(0x03CB).F(to.x).F(to.y).F(to.z).Run();         // LOAD_SCENE
     CVector p = area == 0 ? Ground(to) : to;           // an interior: its floor where its door says
     Cmd(0x00A1).I(h).F(p.x).F(p.y).F(p.z).Run();       // SET_CHAR_COORDINATES
@@ -373,6 +377,7 @@ void EnterWar() {
     me->Health() = std::max(me->Health(), 100.0f);
     if (State(gang).flags & F_ARMOUR) me->Armour() = 100.0f;
     g_entered = true;
+    g_landUntil = NowMs() + 8000, g_landLast = NowMs() + 20000;
     LOGI("Gang war: our player came into the war for %s", Info(gang).name[1]);
 }
 
@@ -427,6 +432,11 @@ void ArmourGangMen() {
 }
 
 void KeepWorld() {
+    // the next restart (a death, an arrest) at the base: the game loads the scene there before it puts the player in
+    if (MyGang() < kGangs) {
+        CVector b = gangmode::BaseSpot(Net().MyId());
+        Cmd(0x016E).F(b.x).F(b.y).F(b.z).F(0.0f).Run();  // OVERRIDE_NEXT_RESTART
+    }
     Cmd(0x03DE).F(kPedDensity).Run();  // SET_PED_DENSITY_MULTIPLIER
     Cmd(0x01EB).F(kCarDensity).Run();  // SET_CAR_DENSITY_MULTIPLIER
     KeepGangWarStatics();
@@ -434,6 +444,56 @@ void KeepWorld() {
     ShutStreetDoors();  // Base.cpp: no doors with their yellow markers (barbers, clothes shops, burger bars, houses)
     ClearStreetWeapons();
     ArmourGangMen();
+}
+
+// Just put at the base (its coming into the war, a restart there): the ground there may not be loaded yet, and the
+// player fell through it (the Aztecas' base). Held where it is till the ground is there, set on it if it went under.
+void KeepOnGround(CPlayerPed* me, uint64_t now) {
+    bool watch = now < g_landUntil && me->Health() > 0.0f && me->AreaCode() == 0 && !me->InVehicle();
+    CVector base = gangmode::BaseSpot(Net().MyId());
+    if (watch && (me->GetPosition() - base).Length2D() < 30.0f) {
+        CVector p = me->GetPosition();
+        float z = -100.0f;
+        Cmd(0x02CE).F(p.x).F(p.y).F(base.z + 4.0f).Out(&z).Run();  // GET_GROUND_Z_FOR_3D_COORD
+        bool ground = z > -50.0f && std::fabs(z - base.z) < 6.0f;
+        int h = GetPedRef(me);
+        if (!ground) {
+            Cmd(0x04E4).F(p.x).F(p.y).Run();  // REQUEST_COLLISION
+            if (!g_heldUp) Cmd(0x04D7).I(h).I(1).Run(), g_heldUp = true;  // FREEZE_CHAR_POSITION
+            g_landUntil = std::min(std::max(g_landUntil, now + 1000), g_landLast);
+            return;
+        }
+        if (p.z < z - 1.0f) {
+            Cmd(0x00A1).I(h).F(p.x).F(p.y).F(z + 0.2f).Run();  // SET_CHAR_COORDINATES: back on it
+            LOGI("Gang war: our player was under the base's ground, set on it");
+        }
+    }
+    if (g_heldUp) {  // the ground is there now (or the watch is over): free again
+        Cmd(0x04D7).I(GetPedRef(me)).I(0).Run();  // FREEZE_CHAR_POSITION off
+        g_heldUp = false;
+    }
+}
+
+// The radar of the gang war: the other gangs' players are not on it (each game sees only its own gang's and its
+// allies' blips), and the gang's leader has its marks: the base's house, and Grove Street's leader Emmet
+constexpr int kIconHouse = 9820, kIconEmmet = 9821;
+std::map<uint8_t, std::pair<int, bool>> g_blipShown;  // player -> its blip, shown
+void KeepRadar() {
+    for (auto& [id, rp] : Players::Instance().All()) {
+        if (!rp.blip) continue;
+        bool show = !Enemies(Net().MyId(), id);
+        auto it = g_blipShown.find(id);
+        if (it != g_blipShown.end() && it->second.first == rp.blip && it->second.second == show) continue;
+        Cmd(0x018B).I(rp.blip).I(show ? 2 : 0).Run();  // CHANGE_BLIP_DISPLAY: radar only, or none
+        g_blipShown[id] = {rp.blip, show};
+    }
+    uint8_t gang = MyGang();
+    bool leader = gang < kGangs && Leader(Net().MyId());
+    CVector door;
+    if (leader && BaseDoorAt(gang, door)) radar::SetIcon(kIconHouse, door, 35 /* RADAR_SPRITE_SAVEHOUSE */);
+    else radar::RemoveIcon(kIconHouse);
+    if (leader && gang == GROVE) radar::SetIcon(kIconEmmet, kEmmet, 18 /* RADAR_SPRITE_EMMETGUN */);
+    else radar::RemoveIcon(kIconEmmet);
 }
 
 void UpdatePlayer() {
@@ -453,7 +513,9 @@ void UpdatePlayer() {
             Teleport(0, gangmode::BaseSpot(Net().MyId()), Rand(0.0f, 360.0f));
         GiveKit();
         if (State(gang).flags & F_ARMOUR) me->Armour() = 100.0f;  // the gang's armour: at every start
+        g_landUntil = now + 8000, g_landLast = now + 20000;
     }
+    KeepOnGround(me, now);
     g_wasDead = dead;
     if (State(gang).level != g_kitLevel && !dead && !me->InVehicle()) GiveKit();
     if (now - g_lookMs > 2000) {
@@ -463,6 +525,11 @@ void UpdatePlayer() {
     if (now - g_densityMs > 3000) {
         g_densityMs = now;
         KeepWorld();
+    }
+    static uint64_t radarMs = 0;
+    if (now - radarMs > 500) {
+        radarMs = now;
+        KeepRadar();
     }
     // Grove Street at Emmet's: armour (and once a weapons upgrade for the gang)
     if (gang == GROVE && !dead && !me->InVehicle() && (me->GetPosition() - kEmmet).Length() < 4.0f && now - g_emmetAskMs > 5 * kMin) {
@@ -711,7 +778,7 @@ void UpdateBribe() {
 // ---- the men of the gangs (attacks, guards)
 bool Alive(CPed* p) { return p && IsPedValid(p) && p->Health() > 0.0f; }
 
-int MakeMan(int gang, const CVector& at, int car, int seat) {  // seat: -2 on foot, -1 the driver, else a passenger seat
+int MakeMan(int gang, const CVector& at, int car, int seat, bool calm) {  // seat: -2 on foot, -1 the driver, else a passenger seat
     const GangInfo& gi = Info(gang);
     int model = gi.models[RandInt(0, 2)];
     if (!HasRoom(PedPool(), kKeepPeds + 2, "ped") || !LoadModelNow(model)) return -1;
@@ -730,7 +797,7 @@ int MakeMan(int gang, const CVector& at, int car, int seat) {  // seat: -2 on fo
     Cmd(0x02E2).I(h).I(f.accuracy).Run();              // SET_CHAR_ACCURACY
     Cmd(0x060F).I(h).F(120.0f).Run();                  // SET_SENSE_RANGE
     Cmd(0x087E).I(h).I(0).Run();                       // SET_CHAR_DROPS_WEAPONS_WHEN_DEAD: none
-    Cmd(0x060B).I(h).I(65542).Run();                   // SET_CHAR_DECISION_MAKER "Empty": no running off
+    if (!calm) Cmd(0x060B).I(h).I(65542).Run();        // SET_CHAR_DECISION_MAKER "Empty": no running off
     if (CPed* p = GetPed(h)) {
         p->Armour() = (State(gang).flags & F_ARMOUR) ? 100.0f : (float)f.armour;
         Peds::Instance().Share(p);
@@ -1253,6 +1320,9 @@ public:
         for (auto& h : g_host) h = HostGang{};
         ResetCapts();
         ResetBase();
+        g_blipShown.clear();
+        radar::RemoveIcon(kIconHouse);
+        radar::RemoveIcon(kIconEmmet);
         radar::RemoveIcon(9801);
     }
     void OnPostProcess() override {

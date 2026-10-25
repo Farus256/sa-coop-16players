@@ -1,6 +1,6 @@
 #pragma once
 // The gang war's parts inside its slice: GangWar.cpp (the players in the war, the money, the purchases, the convoy, the
-// screen and the menu), Capt.cpp (the attacks on territories), Base.cpp (the bases: their guards and their doors).
+// screen and the menu), Capt.cpp (the attacks on territories), Base.cpp (the bases: their people and their doors).
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -15,7 +15,7 @@ enum : uint8_t {
     OP_BUY = 10, OP_EVENT = 11, OP_GIFT = 12, OP_CAPT = 13, OP_CONVOY = 14,
     OP_CAPT_RUN = 15,     // host -> the game that fights an attack: begin it there (or stop it)
     OP_CAPT_REPORT = 16,  // that game -> host: how it goes, how it ended
-    OP_GUARD = 18,        // host -> everyone: whose game keeps a base's guards
+    OP_GUARD = 18,        // host -> everyone: whose game keeps a base's people
 };
 enum Item : uint8_t { IT_CAPT = 1, IT_ARMOUR, IT_BRIBE, IT_PRODUCTION, IT_QUALITY, IT_EMMET, kItems };
 enum Event : uint8_t {
@@ -65,7 +65,8 @@ game::CPed* NearestOf(const game::CVector& at, float within, const std::function
 uint8_t GangOfPed(game::CPed* p);  // a player's gang, a gang member's, else gangmode::NONE
 bool OfGang(game::CPed* p, int gang);
 // a man of the gang (seat: -2 on foot, -1 the car's driver, else its passenger seat), shared with every game; -1: none
-int MakeMan(int gang, const game::CVector& at, int car, int seat);
+// calm: the street's own ways (it reacts as its gang's people do), not a fighter's that only does what it is told
+int MakeMan(int gang, const game::CVector& at, int car, int seat, bool calm = false);
 
 void SendEvent(uint8_t ev, uint8_t a = 255, uint8_t b = 255, int zone = -1, int32_t value = 0, int to = -1);
 void CountZones();  // host
@@ -93,14 +94,15 @@ void UpdateRuns();              // every game: the attacks it fights
 bool HandleCapt(uint8_t from, uint8_t op, Reader& r);
 void ResetCapts();
 
-// ---- Base.cpp: each base's guards (5-10 of the gang's men about it, kept by the game of the player nearest it) and
-// its door (a house's door near the base, into the house, with the gang's marker)
+// ---- Base.cpp: each base's people (5-10 of the gang's men walking about it, kept by the game of the player nearest
+// it) and its door (a house's door near the base, into the house, with the gang's marker)
 void HostUpdateGuards();
 void UpdateGuards();
 bool HandleGuards(uint8_t from, uint8_t op, Reader& r);
 void UpdateBaseDoors();   // every game: through the base's door, in and out
 void PlaceBaseMarkers();  // every game, before the frame's process: the doors' markers
 void ShutStreetDoors();   // the city's other doors shut (no markers)
+bool BaseDoorAt(int gang, game::CVector& at);  // the base's door outside (found once the world is up)
 void ResetBase();
 
 }  // namespace coop::gangwar::war

@@ -249,9 +249,11 @@ The players come in at their gang's base in its clothes (the leader as Sweet, Bi
 weapons, and come back there after every death or arrest, not at a hospital. Their own gang's people on the street
 respect them, the others hate them, and players of different gangs hurt each other. The territories are painted in
 their owners' colours on the map and the radar as in the story (one under attack flashes), and the whole map is known
-from the start. The streets have a little fewer people and cars than usual, and there are no doors with yellow markers (barbers, clothes shops and the rest) and no weapons lying about the city. Each
-base is guarded by 5-10 of the gang's men (more with its weapons' level), a dead guard replaced after 90 seconds, and
-has its own way into a house: a ring in the gang's colour at the nearest house's door (or at the base itself when no
+from the start. The streets have a little fewer people and cars than usual, and there are no doors with yellow markers (barbers, clothes shops and the rest) and no weapons lying about the city. 5-10 of
+the gang's people (more with its weapons' level) walk the pavements about each base, a dead one replaced after 90
+seconds. The gang's own people of the street can be taken into the player's group (`G` in front of one, or locked on
+to it). Players of other gangs are not on the radar. The gang's leader sees the gang's house on the radar, and Grove
+Street's leader Emmet too. F1 does nothing in the game. Each base has its own way into a house: a ring in the gang's colour at the nearest house's door (or at the base itself when no
 house stands near), for the gang's own players. Every gang makes $200 of
 goods every 6 minutes; the money is the gang's, and any of its players spends it in the F5 menu (or `/gang`):
 

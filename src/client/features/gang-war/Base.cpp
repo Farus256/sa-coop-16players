@@ -1,10 +1,10 @@
 // The gangs' bases.
 //
-// Guards: 5-10 of the gang's men (more with its weapons' level, the Vagos one more) stand about its base, on open
-// ground round it, and shoot at whoever of another gang comes within 45 m; one who goes after an enemy comes back to
-// its post, and a dead one is replaced after 90 s. They are made and run by the game of the player nearest the base
-// (within 180 m; it keeps them till its player is 320 m off): the host says whose (OP_GUARD), as players come and go.
-// A game far off has no ground there, and its men would stand frozen.
+// Its people: 5-10 of the gang's men (more with its weapons' level, the Vagos one more) walk the pavements about its
+// base, as its own people of the street do (the game's wandering; one gone too far comes back), and a dead one is
+// replaced after 90 s. They are made and run by the game of the player nearest the base (within 180 m; it keeps them
+// till its player is 320 m off): the host says whose (OP_GUARD), as players come and go. A game far off has no ground
+// there, and its men would stand frozen.
 //
 // The door: each base has a way into a house, a door of the city's own near it (a house's front door within 80 m:
 // its own interior behind it), else a marker at the base into a house of the gang's kind (the Johnsons', a crack den,
@@ -31,89 +31,47 @@ using namespace game;
 using namespace gangmode;
 using game::script::Cmd;
 
-// ---------------------------------------------------------------- the guards
-constexpr float kGuardTake = 180.0f, kGuardKeep = 320.0f, kGuardSight = 45.0f;
+// ---------------------------------------------------------------- the people about the base
+constexpr float kGuardTake = 180.0f, kGuardKeep = 320.0f;
+constexpr float kRoam = 70.0f;  // farther off than this from the base: back towards it
 constexpr uint64_t kGuardBackMs = 90000;
 
-uint8_t g_guardRunner[kGangs] = {NONE, NONE, NONE, NONE};  // whose game keeps each base's guards (as the host says)
+uint8_t g_guardRunner[kGangs] = {NONE, NONE, NONE, NONE};  // whose game keeps each base's people (as the host says)
 uint64_t g_guardSentMs = 0;
 
 struct Guards {
-    std::vector<CVector> posts;
     std::vector<CPed*> men;
-    std::vector<uint64_t> backAt;  // when a dead one's post gets a new man
+    std::vector<uint64_t> backAt;   // when a dead one is replaced
+    std::vector<uint8_t> going;     // walking back towards the base
 };
 Guards g_guards[kGangs];
 
 int GuardCount(int gang) { return std::min(10, 5 + (int)State(gang).level + (gang == VAGOS ? 1 : 0)); }
 
-struct ColPoint {
-    CVector point;
-    uint8_t rest[0x2C - 12];
-};
-bool Blocked(const CVector& a, const CVector& b) {  // a wall or an object between (CWorld::ProcessLineOfSight)
-    ColPoint cp{};
-    CEntity* hit = nullptr;
-    return Call<0x56BA00, bool>(&a, &b, &cp, &hit, true, false, false, true, false, false, false, false);
-}
-
-// Posts on open ground round the base: rings of 8-23 m, ground near the base's height (not a roof, not a pit), seen
-// from the base (no wall between: not inside a house), spread out
-std::vector<CVector> FindPosts(const CVector& base, int want) {
-    std::vector<CVector> cands;
-    CVector eye = base + CVector{0, 0, 0.8f};
-    for (float r : {8.0f, 13.0f, 18.0f, 23.0f})
-        for (int k = 0; k < 16; ++k) {
-            float a = (float)k * 0.3926991f + r * 0.17f;
-            CVector p = base + CVector{std::cos(a) * r, std::sin(a) * r, 0.0f};
-            float z = -100.0f;
-            Cmd(0x02CE).F(p.x).F(p.y).F(base.z + 3.0f).Out(&z).Run();  // GET_GROUND_Z_FOR_3D_COORD
-            if (z < -50.0f || std::fabs(z - base.z) > 3.0f) continue;
-            p.z = z + 1.0f;
-            if (Blocked(eye, p + CVector{0, 0, -0.2f})) continue;
-            cands.push_back(p);
-        }
-    std::vector<CVector> out;
-    if (cands.empty()) return out;
-    out.push_back(cands[0]);
-    while ((int)out.size() < want && out.size() < cands.size()) {  // the farthest from those taken, each next
-        const CVector* best = nullptr;
-        float bestD = -1.0f;
-        for (const CVector& c : cands) {
-            float d = 1e9f;
-            for (const CVector& o : out) d = std::min(d, (c - o).Length2D());
-            if (d > bestD) bestD = d, best = &c;
-        }
-        if (!best || bestD < 1.0f) break;
-        out.push_back(*best);
-    }
-    return out;
+// a pavement near the base: the walkers' path node nearest a point 15-50 m off
+CVector Pavement(const CVector& base, float from, float to) {
+    float a = Rand(0.0f, 6.2831853f), d = Rand(from, to);
+    return WalkNear(base + CVector{std::cos(a) * d, std::sin(a) * d, 0.0f});
 }
 
 void Release(int gang) {
     Guards& G = g_guards[gang];
     for (CPed* p : G.men)
         if (p && IsPedValid(p)) Cmd(0x009B).I(GetPedRef(p)).Run();  // DELETE_CHAR: the new keeper's game makes its own
-    G.men.clear(), G.backAt.clear();
+    G = Guards{};
 }
 
 void KeepGuards(int gang) {
     Guards& G = g_guards[gang];
     const CVector& base = Info(gang).base;
-    if (G.posts.empty()) {
-        G.posts = FindPosts(base, 10);
-        if (G.posts.empty()) G.posts.push_back(WalkNear(base));
-        LOGI("Gang war: %d guard posts at the base of %s", (int)G.posts.size(), Info(gang).name[1]);
-    }
     int want = GuardCount(gang);
-    for (size_t i = want; i < G.men.size(); ++i)  // fewer posts wanted now: the extra men go
+    for (size_t i = want; i < G.men.size(); ++i)
         if (G.men[i] && IsPedValid(G.men[i])) Cmd(0x01C2).I(GetPedRef(G.men[i])).Run();
     G.men.resize(want, nullptr);
     G.backAt.resize(want, 0);
+    G.going.resize(want, 0);
     uint64_t now = NowMs();
     for (int i = 0; i < want; ++i) {
-        CVector post = G.posts[i % G.posts.size()];
-        if (i >= (int)G.posts.size()) post = post + CVector{Rand(-1.5f, 1.5f), Rand(-1.5f, 1.5f), 0.0f};
         CPed*& p = G.men[i];
         if (p && !Alive(p)) {
             if (IsPedValid(p)) Cmd(0x01C2).I(GetPedRef(p)).Run();  // MARK_CHAR_AS_NO_LONGER_NEEDED: the body goes
@@ -122,21 +80,24 @@ void KeepGuards(int gang) {
         }
         if (!p) {
             if (now < G.backAt[i]) continue;
-            int h = MakeMan(gang, post, -1, -2);
+            CVector at = Pavement(base, 12.0f, 45.0f);
+            int h = MakeMan(gang, at, -1, -2, true);
             if (h < 0) continue;
             p = GetPed(h);
-            CVector out = post - base;
-            Cmd(0x0173).I(h).F(std::atan2(-out.x, out.y) * 57.29578f).Run();  // SET_CHAR_HEADING: facing out
+            Cmd(0x05DE).I(h).Run();  // TASK_WANDER_STANDARD: along the pavement
+            G.going[i] = 0;
             continue;
         }
         int h = GetPedRef(p);
-        CPed* enemy = NearestOf(p->GetPosition(), kGuardSight, [gang](CPed* q) {
-            uint8_t g = GangOfPed(q);
-            return g < kGangs && g != gang;
-        });
-        if (enemy) Cmd(0x05E2).I(h).I(GetPedRef(enemy)).Run();  // TASK_KILL_CHAR_ON_FOOT
-        else if ((p->GetPosition() - post).Length2D() > 3.0f)
-            Cmd(0x05D3).I(h).F(post.x).F(post.y).F(post.z).I(4).I(10000).Run();  // TASK_GO_STRAIGHT_TO_COORD: walk back
+        float d = (p->GetPosition() - base).Length2D();
+        if (!G.going[i] && d > kRoam) {
+            CVector to = Pavement(base, 5.0f, 25.0f);
+            Cmd(0x05D3).I(h).F(to.x).F(to.y).F(to.z).I(4).I(60000).Run();  // TASK_GO_STRAIGHT_TO_COORD: walking back
+            G.going[i] = 1;
+        } else if (G.going[i] && d < 30.0f) {
+            Cmd(0x05DE).I(h).Run();  // wandering again
+            G.going[i] = 0;
+        }
     }
 }
 
@@ -361,6 +322,12 @@ void PlaceBaseMarkers() {
         }
         Ring(0x47570000u + (uint32_t)g * 2 + (outside ? 0 : 1), mark, g);
     }
+}
+
+bool BaseDoorAt(int gang, CVector& at) {
+    if (gang < 0 || gang >= kGangs || !g_doors[gang].found) return false;
+    at = g_doors[gang].outMark;
+    return true;
 }
 
 void ResetBase() {
