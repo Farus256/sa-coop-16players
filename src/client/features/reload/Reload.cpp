@@ -64,7 +64,10 @@ void TryReload() {
     if (PlayerInfos()[0]._padDD[0x14D - 0xDD]) ms /= 2;      // CPlayerInfo::m_bFastReload
     w.state = WEAPONSTATE_RELOADING;
     w.timeForNextShot = TimeMs() + ms;  // CWeapon::Update: the clip is filled once this time is up
-    if (a->block && EnsureBlock(a->block))
+    // aiming, the game plays the gun's reload itself (CTaskSimpleUseGun): ours over it was a second reload; only
+    // with the gun down is it ours
+    bool aiming = GetPad(0)->NewState.RightShoulder1 != 0;
+    if (!aiming && a->block && EnsureBlock(a->block))
         Cmd(0x0A1A).I(GetPedRef(me)).S(a->anim).S(a->block).F(4.0f).I(0).I(0).I(0).I(0).I((int)ms).Run();  // TASK_PLAY_ANIM_SECONDARY
     LOGD("Reload by hand: weapon %d, %d of %d in the clip", w.type, w.ammoInClip, clip);
 }
