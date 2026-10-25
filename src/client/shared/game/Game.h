@@ -349,6 +349,8 @@ struct CVehicle : CPhysical {
 
     bool EngineOn() { return (VehicleFlagsLo() >> 4) & 1; }
     void SetEngineOn(bool v) { v ? VehicleFlagsLo() |= (1u << 4) : VehicleFlagsLo() &= ~(1u << 4); }
+    bool HandbrakeOn() { return (VehicleFlagsLo() >> 5) & 1; }  // bIsHandbrakeOn
+    void SetHandbrake(bool v) { v ? VehicleFlagsLo() |= (1u << 5) : VehicleFlagsLo() &= ~(1u << 5); }
     bool LightsOn() { return (VehicleFlagsLo() >> 6) & 1; }
     bool SirenOn() { return (VehicleFlagsHi() >> 15) & 1; }  // bit 47 overall
     void SetSiren(bool v) { v ? VehicleFlagsHi() |= (1u << 15) : VehicleFlagsHi() &= ~(1u << 15); }

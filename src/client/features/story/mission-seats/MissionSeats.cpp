@@ -53,8 +53,10 @@ bool Callable(const RemotePlayer& rp, const CVector& at, int8_t area) {
 void Call(uint8_t kind, CVehicle* veh, CPlayerPed* cj) {
     NetVehicle* nv = Vehicles::Instance().EnsureNetworked(veh);
     if (!nv) return;
-    // a bike's pillion is where CJ stands himself ("Just Business"): no seat nor place on it for anyone else
-    if (kind == KIND_ATTACH && veh->IsBike()) return;
+    // a bike's pillion is where CJ stands himself ("Just Business"), or the seat of the mission's own man, who gets on
+    // after CJ was put on it (OG Loc behind him in "OG Loc": a partner warped there left him with no seat, and the
+    // mission stood). No seat nor place on a bike for anyone else: they get a bike of their own (Players::FollowHost)
+    if (veh->IsBike()) return;
     std::vector<int> seats;  // free passenger seats here
     for (int s = 0; s < veh->MaxPassengers() && s < 8; ++s)
         if (!veh->Passengers()[s]) seats.push_back(s);

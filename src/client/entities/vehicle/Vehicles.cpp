@@ -1060,6 +1060,10 @@ void Vehicles::ApplyMirror(NetVehicle& nv, float dt) {
     v->SteerAngle() = nv.steerShown;
     v->GasPedal() = st.gas;
     v->BrakePedal() = st.brake;
+    // The handbrake as the owner's. Nothing clears it on a copy (only a player's car takes it from the pad, CAutomobile::
+    // ProcessControlInputs), and once this game set it (a player's copy getting in) a car with a passenger went on with
+    // its wheels locked, a bike bent over, for the other players.
+    v->SetHandbrake((st.flags & VehicleState::F_HANDBRAKE) != 0);
     v->Health() = st.health;
     v->SetEngineOn((st.flags & VehicleState::F_ENGINE) != 0);
     v->SetSiren((st.flags & VehicleState::F_SIREN) != 0);
@@ -1263,6 +1267,7 @@ void Vehicles::OnPostProcess() {
             if (nv.hasState) {
                 nv.veh->SteerAngle() = nv.steerShown;
                 nv.veh->BrakePedal() = nv.state.brake;
+                nv.veh->SetHandbrake((nv.state.flags & VehicleState::F_HANDBRAKE) != 0);
                 ApplyParts(nv.veh, nv.state);  // the step just leaned a bike again by its speed change
                 // CHeli::ProcessControl just switched its searchlight off (no police AI, no player here) and
                 // CHeli::PreRender (0x6C5420) adds the light to this frame at night: as the owner's
