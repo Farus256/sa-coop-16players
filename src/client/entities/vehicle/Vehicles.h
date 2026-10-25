@@ -34,6 +34,8 @@ struct NetVehicle {
     bool groundless = false;
     uint64_t aboveSinceMs = 0;   // mirror: held above its owner's car since (something only this game has under it)
     game::CEntity* goneThrough = nullptr;  // mirror: what it was let through last (logged once)
+    uint64_t lookUnderMs = 0;              // mirror: when what holds it up was looked for last
+    bool pinnedAbove = false;              // mirror: still held up, so it stands where its owner has it
     uint16_t netId = 0;
     game::CVehicle* veh = nullptr;
     int handle = -1;

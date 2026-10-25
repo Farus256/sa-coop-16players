@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -65,23 +67,78 @@ uint64_t g_offerMs = 0, g_frameMs = 0;
 using UpdatePadsFn = void(__cdecl*)();
 UpdatePadsFn g_origUpdatePads = nullptr;
 
+bool ScriptIs(void* s, const char* lowerName) {
+    char name[9]{};
+    memcpy(name, (const char*)s + 0x08, 8);  // CRunningScript::m_szName
+    for (char& c : name) c = (char)std::tolower((unsigned char)c);
+    return strcmp(name, lowerName) == 0;
+}
+
 bool ContestRunning() {
-    for (void* s = Ref<void*>(0xA8B42C); s; s = Field<void*>(s, 0x00)) {  // CTheScripts::pActiveScripts
-        char name[9]{};
-        memcpy(name, (const char*)s + 0x08, 8);                         // CRunningScript::m_szName
-        for (char& c : name) c = (char)std::tolower((unsigned char)c);
-        if (strcmp(name, kContestScript) == 0) return true;
-    }
+    for (void* s = Ref<void*>(0xA8B42C); s; s = Field<void*>(s, 0x00))  // CTheScripts::pActiveScripts
+        if (ScriptIs(s, kContestScript)) return true;
     return false;
 }
+
+bool Delegated() { return g_host == Host::Given && g_player != kHost; }
+
+// The judging stays in the host's game: LOWGAME takes the first frame the stick points somewhere within 200 ms of a beat
+// and scores how far that beat is (GET_BEAT_PROXIMITY: within 35 ms the best, 100 a weak hit, 200 off time). The player
+// sees the arrows a network trip late and its stick comes back another trip later, so each push came here that long
+// after its beat (the first test: off time or missed throughout). While another player plays, the judging scripts get
+// the beats as they were that long ago; BDISPLY (the arrows that player sees) keeps the beats as they are.
+uint32_t g_judgeShiftMs = 0;
+
+uint32_t JudgeDelayMs() {
+    const PeerInfo* p = Net().Peer(g_player);
+    uint32_t trip = Net().Rtt() + (p ? p->ping : Net().Rtt());  // host -> player (the frame) -> host (its stick)
+    return std::min<uint32_t>(trip + (uint32_t)kFrameEveryMs, 400);  // + the wait for the next frame and stick sent
+}
+
+using Commands1900Fn = int8_t(__fastcall*)(void* script, void* edx, int command);
+Commands1900Fn g_origCommands1900 = nullptr;
+int8_t __fastcall HookCommands1900(void* script, void* edx, int command) {  // CRunningScript::ProcessCommands1900To1999
+    if (command != 0x07B1 || !Delegated() || ScriptIs(script, kContestScript)) return g_origCommands1900(script, edx, command);
+    g_judgeShiftMs = JudgeDelayMs();  // GET_BEAT_PROXIMITY of a judging script
+    int8_t result = g_origCommands1900(script, edx, command);
+    g_judgeShiftMs = 0;
+    return result;
+}
+
+// the beat track's play time the beat info is worked out from (AEAudioHardware's GetBeatInfo, from its stream thread)
+using PlayTimeFn = int(__fastcall*)(void* thread, void* edx);
+PlayTimeFn g_origPlayTime = nullptr;
+int __fastcall HookBeatPlayTime(void* thread, void* edx) {
+    int ms = g_origPlayTime(thread, edx);
+    return ms < 0 || !g_judgeShiftMs ? ms : std::max(0, ms - (int)g_judgeShiftMs);
+}
+
+// How far the nearest beat is from now, in ms (+ ahead, - gone); INT32_MIN without a beat track
+int NearestBeatMs() {
+    void* info = CallMethod<0x5071B0, void*>((void*)0xB6BC90);  // CAudioEngine::GetBeatInfo (AudioEngine)
+    if (!info || !Field<int32_t>(info, 0xA0)) return INT32_MIN;  // tBeatInfo: no track
+    int prev = Field<int32_t>(info, 0x48), next = Field<int32_t>(info, 0x50);  // the beat before and after now
+    return std::abs(prev) < std::abs(next) ? prev : next;
+}
+
+bool g_stickOut = false;  // the player's right stick out as far as LOWGAME counts it (beyond 64)
 
 // right after the game read the pads: the host's pad 0 is the player's who plays the contest
 void __cdecl HookUpdatePads() {
     g_origUpdatePads();
-    if (g_host != Host::Given || g_player == kHost || !Net().Online()) return;
+    if (!Delegated() || !Net().Online()) return;
     RemotePlayer* rp = Players::Instance().Get(g_player);
     if (!rp || !rp->hasState || NowMs() - rp->stateRecvMs > 1000) return;
-    rp->state.pad.To(GetPad(0)->NewState);
+    const PadState& pad = rp->state.pad;
+    pad.To(GetPad(0)->NewState);
+    // each push against the beat as the judging gets it: how well the delay matches that player's
+    bool out = (float)pad.rx * pad.rx + (float)pad.ry * pad.ry > 64.0f * 64.0f;
+    if (out && !g_stickOut)
+        if (int beat = NearestBeatMs(); beat != INT32_MIN) {
+            uint32_t delay = JudgeDelayMs();
+            LOGI("Rhythm contest: a push %+d ms from the beat here, %+d judged (delay %u ms)", beat, beat + (int)delay, delay);
+        }
+    g_stickOut = out;
 }
 
 void Send(uint8_t op, uint8_t value = 0) {
@@ -118,7 +175,7 @@ void Give(uint8_t player) {
     SendSprites(player);
     ui::TheChat().AddSystem(Format(TR("Конкурс играет %s. Ваш пад сейчас его.", "%s plays the contest. Your pad is theirs for now."),
                                    Net().PeerName(player).c_str()));
-    LOGI("Rhythm contest: player %d plays it", player);
+    LOGI("Rhythm contest: player %d plays it (judged %u ms back)", player, JudgeDelayMs());
 }
 
 void SendFrame() {
@@ -287,6 +344,9 @@ public:
     const char* Name() const override { return "Minigame"; }
     void OnInstallHooks() override {
         mem::RedirectCallFn(0x53BEE6, &HookUpdatePads, &g_origUpdatePads);  // CGame::Process -> CPad::UpdatePads
+        // CRunningScript::CommandHandlerTable[19]: commands 1900-1999 (GET_BEAT_PROXIMITY among them)
+        g_origCommands1900 = (Commands1900Fn)mem::SwapVTable((void**)0x8A6168, 19, (void*)&HookCommands1900);
+        mem::RedirectCallFn(0x4D8FEF, &HookBeatPlayTime, &g_origPlayTime);  // GetBeatInfo -> the track's play time
         Net().SetHandler(proto::G_MINIGAME, &Handle);
     }
     void OnSessionEnd() override { Reset(); }
