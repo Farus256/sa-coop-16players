@@ -7,6 +7,8 @@
 // 10 s: the host plays it as before. The mission, its score and its result stay the host's.
 #include "features/minigame/Minigame.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -127,9 +129,12 @@ int NearestBeatMs() {
 
 bool g_stickOut = false;  // the player's right stick out as far as LOWGAME counts it (beyond 64)
 
+void ContestKeys();
+
 // right after the game read the pads: the host's pad 0 is the player's who plays the contest
 void __cdecl HookUpdatePads() {
     g_origUpdatePads();
+    ContestKeys();
     if (!Delegated() || !Net().Online()) return;
     RemotePlayer* rp = Players::Instance().Get(g_player);
     if (!rp || !rp->hasState || NowMs() - rp->stateRecvMs > 1000) return;
@@ -238,6 +243,29 @@ void HostFrame() {
 bool g_offered = false, g_playing = false, g_txdLoaded = false;
 std::vector<Rect> g_rects;
 uint64_t g_rectsMs = 0;
+
+// The partner's numpad as the right stick. The game makes it the right stick only for a car's driver (the hydraulics):
+// a passenger's pushed nothing, and the host's game saw no push in the whole contest (all "late"). Read here as the
+// game reads it, with Num Lock on or off; a gamepad's stick stays as it is.
+void ContestKeys() {
+    if (!g_playing || !IsForeground() || ui::TheChat().IsOpen() || MenuActive()) return;
+    auto down = [](int a, int b) { return (GetAsyncKeyState(a) & 0x8000) || (GetAsyncKeyState(b) & 0x8000); };
+    int x = 0, y = 0;
+    if (down(VK_NUMPAD4, VK_LEFT) || down(VK_NUMPAD7, VK_HOME) || down(VK_NUMPAD1, VK_END)) x -= 128;
+    if (down(VK_NUMPAD6, VK_RIGHT) || down(VK_NUMPAD9, VK_PRIOR) || down(VK_NUMPAD3, VK_NEXT)) x += 128;
+    if (down(VK_NUMPAD8, VK_UP) || down(VK_NUMPAD7, VK_HOME) || down(VK_NUMPAD9, VK_PRIOR)) y -= 128;
+    if (down(VK_NUMPAD2, VK_DOWN) || down(VK_NUMPAD1, VK_END) || down(VK_NUMPAD3, VK_NEXT)) y += 128;
+    CControllerState& s = GetPad(0)->NewState;
+    if (x || y) {
+        s.RightStickX = (int16_t)x;
+        s.RightStickY = (int16_t)y;
+    }
+    // each push as it leaves this game, to compare with the host's log
+    static bool out = false;
+    bool now = (float)s.RightStickX * s.RightStickX + (float)s.RightStickY * s.RightStickY > 64.0f * 64.0f;
+    if (now && !out) LOGI("Rhythm contest: a push %d %d%s", s.RightStickX, s.RightStickY, x || y ? " (keys)" : "");
+    out = now;
+}
 
 void StopPlaying() {
     if (g_txdLoaded) Cmd(0x0391).Run();  // REMOVE_TEXTURE_DICTIONARY: the sprites go with it
