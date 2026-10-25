@@ -374,6 +374,22 @@ void __cdecl HookConstructPedModel(uint32_t model, void* clothes, const void* ol
     g_origConstructPedModel(model, clothes, old, cutscene);
 }
 
+// Sprinting indoors: CPlayerPed::ControlButtonSprint gives nothing in an interior (the game's houses, shops, clubs:
+// a jog at most). It is asked as outside: the interior is 0 for the call (the game's and the player's), then back.
+using SprintFn = float(__fastcall*)(void*, void*, int);
+SprintFn g_origSprint = nullptr;
+float __fastcall HookControlButtonSprint(void* player, void* edx, int type) {
+    int32_t& area = *(int32_t*)0xB72914;                 // CGame::currArea
+    int8_t& own = *(int8_t*)((uint8_t*)player + 0x2F);  // CEntity::m_nAreaCode
+    if (area == 0 && own == 0) return g_origSprint(player, edx, type);
+    int32_t wasArea = area;
+    int8_t wasOwn = own;
+    area = 0, own = 0;
+    float r = g_origSprint(player, edx, type);
+    area = wasArea, own = wasOwn;
+    return r;
+}
+
 using ReplayFn = void(__cdecl*)();
 ReplayFn g_origReplayUpdate = nullptr;
 void __cdecl HookReplayUpdate() {}
@@ -816,6 +832,7 @@ void Apply() {
     // the recording, a copy of another game's or a special character too, and crashed in CReplay::RestoreClothesDesc
     // (0x45C7D4, a ped whose clothes it never had). Neither recorded nor played back.
     mem::HookFn(0x460500, &HookReplayUpdate, &g_origReplayUpdate, "CReplay::Update");
+    mem::HookFn(0x60A610, &HookControlButtonSprint, &g_origSprint, "CPlayerPed::ControlButtonSprint");
     mem::HookFn(0x57C520, &HookCentreMousePointer, &g_origCentreMouse, "CMenuManager::CentreMousePointer");
     mem::RedirectCallFn(0x53E9F1, &HookIdleMouseSetPos, &g_origIdleMouseSetPos);  // Idle -> RsMouseSetPos
     mem::HookFn(0x53F3C0, &HookUpdateMouse, &g_origUpdateMouse, "CPad::UpdateMouse");
