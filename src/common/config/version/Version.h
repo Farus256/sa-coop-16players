@@ -1,7 +1,7 @@
 #pragma once
 
 #define COOP_NAME "SA:COOP"
-#define COOP_VERSION_STR "0.4.2"  // tools/build.py gives the version resource its numbers from this
+#define COOP_VERSION_STR "0.4.3"  // tools/build.py gives the version resource its numbers from this
 
 #ifndef RC_INVOKED  // the resource compiler reads only the macros above (VersionInfo.rc)
 #include <cstdint>

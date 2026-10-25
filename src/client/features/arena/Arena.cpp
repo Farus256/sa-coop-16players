@@ -242,58 +242,35 @@ void ShutDoors(bool shut) {
 }
 
 // The police's and the SWAT's knifeman is Cerberus (Manhunt) when the game has his model: cerberus.dff and .txd in
-// gta3.img (or in modloader), loaded as a special character; without it, a man of the force as before
-bool ImgHas(const std::string& file) {
-    std::wstring dir = ModuleDir();  // the game's
-    if (FILE* f = _wfopen((dir + L"models\\gta3.img").c_str(), L"rb")) {
-        char head[8] = {};
-        bool found = false;
-        if (std::fread(head, 1, 8, f) == 8 && std::memcmp(head, "VER2", 4) == 0) {
-            uint32_t count = 0;
-            std::memcpy(&count, head + 4, 4);
-            char entry[32];
-            for (uint32_t k = 0; k < count && k < 40000 && std::fread(entry, 1, 32, f) == 32; ++k) {
-                char name[25] = {};
-                std::memcpy(name, entry + 8, 24);
-                if (_stricmp(name, file.c_str()) == 0) {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        std::fclose(f);
-        if (found) return true;
-    }
-    // modloader: any folder of it
-    std::vector<std::wstring> todo{dir + L"modloader"};
-    std::wstring want = Utf8ToWide(file);
-    for (size_t n = 0; n < todo.size() && n < 400; ++n) {
-        WIN32_FIND_DATAW fd;
-        HANDLE hf = FindFirstFileW((todo[n] + L"\\*").c_str(), &fd);
-        if (hf == INVALID_HANDLE_VALUE) continue;
-        do {
-            std::wstring nm = fd.cFileName;
-            if (nm == L"." || nm == L"..") continue;
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) todo.push_back(todo[n] + L"\\" + nm);
-            else if (_wcsicmp(nm.c_str(), want.c_str()) == 0) {
-                FindClose(hf);
-                return true;
-            }
-        } while (FindNextFileW(hf, &fd));
-        FindClose(hf);
-    }
-    return false;
-}
+// gta3.img (or another archive the game reads, or modloader), loaded as a special character; without it, a man of the
+// force as before
 void LoadKnifeModel() {
     g_knifeModel = -1;
     if (kFactions[g_arena.faction].models[0] != 280 && kFactions[g_arena.faction].models[0] != 285) return;  // the police, SWAT
-    static int known = -1;  // looked for once
-    if (known < 0) known = ImgHas("cerberus.dff") && ImgHas("cerberus.txd") ? 1 : 0;
-    if (!known) return;
-    Cmd(0x023C).I(kKnifeSlot).S8("CERBERUS").Run();  // LOAD_SPECIAL_CHARACTER
-    Cmd(0x038B).Run();                               // LOAD_ALL_MODELS_NOW
-    if (IsModelLoaded(kKnifeSpecial)) g_knifeModel = kKnifeSpecial;
-    LOGI("Arena: the knifemen are Cerberus (%s)", g_knifeModel >= 0 ? "loaded" : "not loaded");
+    // Not LOAD_SPECIAL_CHARACTER: its name is 8 bytes with no room for the end of the string, and "cerberus" is 8
+    // letters long; the game read on past it and crashed. CStreaming::RequestSpecialModel with the name as it is,
+    // once the archive's list of extra models has it.
+    void* dir = Ref<void*>(0x8E48D0);  // CStreaming::ms_pExtraObjectsDir
+    if (!dir || !CallMethod<0x532450, void*>(dir, "cerberus")) {  // CDirectory::FindItem
+        LOGW("Arena: cerberus.dff is not among the game's extra models");
+        return;
+    }
+    Call<0x409D10>(kKnifeSpecial, "cerberus", 2);  // CStreaming::RequestSpecialModel (STREAMING_GAME_REQUIRED)
+    LoadAllRequestedModels(false);
+    if (!IsModelLoaded(kKnifeSpecial)) {
+        LOGW("Arena: Cerberus did not load");
+        return;
+    }
+    // a model that is no character (no skin's bones: a conversion gone wrong) crashed the game as the ped was made
+    void* info = Ref<void*>(0xA9B0C8 + (uintptr_t)kKnifeSpecial * 4);  // CModelInfo::ms_modelInfoPtrs
+    void* clump = info ? Field<void*>(info, 0x1C) : nullptr;     // CBaseModelInfo::m_pRwObject
+    if (!clump || !Call<0x734A40, void*>(clump)) {                // GetAnimHierarchyFromSkinClump
+        LOGW("Arena: cerberus.dff has no character's skeleton: not used");
+        Cmd(0x0296).I(kKnifeSlot).Run();  // UNLOAD_SPECIAL_CHARACTER
+        return;
+    }
+    g_knifeModel = kKnifeSpecial;
+    LOGI("Arena: the knifemen are Cerberus");
 }
 
 // into the place, a little apart from the others
@@ -308,7 +285,6 @@ void TakeIn() {
     CVector at = pl.pos + CVector{std::cos(a) * 1.2f, std::sin(a) * 1.2f, 0.0f};
     if (!Net().Online()) at = pl.pos;
     Teleport(pl.area, at, Rand(0.0f, 360.0f));
-    if (me->Armour() < 100.0f) me->Armour() = 100.0f;
     g_arena.taken = true;
     ShutDoors(true);
 }
