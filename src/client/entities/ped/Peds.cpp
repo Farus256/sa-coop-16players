@@ -736,8 +736,28 @@ bool Peds::EvictRandomCopy() {
     return true;
 }
 
+// The ped pool running out. With three players and a crowd shot at, the game ran out of tasks and sounds for so many
+// people before the pool itself was full (127 of 140).
+constexpr int kPedPoolLow = 45;
+constexpr int kPedPoolForBodies = 60;  // fewer free places than this: another game's dead are not made here
+
+// Free places in the ped pool, looked at four times a second
+static int PedPoolFree() {
+    static uint64_t atMs = 0;
+    static int free = 140;
+    if (NowMs() - atMs < 250) return free;
+    atMs = NowMs();
+    CPoolHeader* pool = PedPool();
+    if (!pool) return free;
+    free = 0;
+    for (int i = 0; i < pool->size; ++i) free += pool->byteMap[i] < 0;
+    return free;
+}
+
 CPed* Peds::SpawnMirror(NetPed& np) {
     const PedSyncState& st = np.state;
+    // a body from another game, with the pool filling up (people dying by the dozen near three players): not made
+    if ((st.flags & PedSyncState::F_DEAD) && PedPoolFree() < kPedPoolForBodies) return nullptr;
     int model = np.model;
     if (model >= kSpecialFirst && model <= kSpecialLast) {
         if (np.special.empty()) return nullptr;
@@ -1149,6 +1169,27 @@ void Peds::Unspawn(NetPed& np) {
     np = fresh;
 }
 
+// The game clears its own dead after a while (CPopulation::ManagePed), but a copy is a script's ped to it and stays
+// until its owner's body goes, which takes as long again over there. With three players every game kept its own dead
+// and the other two games' as well: rockets and a minigun into a crowd filled the ped pool with bodies in a minute
+// (84 of 128 dead, two thirds of them copies) and every game crashed, out of tasks and sounds for its people (0x691238,
+// 0x668269). A copy's body goes here after 15 s out of this player's sight, or at once when the pool is running out;
+// the record stays, and with its death applied the copy is not made again.
+bool Peds::ClearCopyBody(NetPed& np, uint64_t now) {
+    constexpr uint64_t kBodyKeepMs = 15000;
+    CPed* ped = np.ped;
+    if (ped->InVehicle()) return false;
+    bool low = PedPoolFree() < kPedPoolLow;
+    if (!low && (now - np.deadMs < kBodyKeepMs || CallMethod<0x534540, bool>(ped))) return false;  // CEntity::GetIsOnScreen
+    Cmd(0x009B).I(np.handle).Run();  // DELETE_CHAR
+    m_byPtr.erase(ped);
+    np.ped = nullptr;
+    np.handle = -1;
+    static int said = 0;
+    if (said++ < 10) LOGI("Copy %04X: its body cleared here (%s)", np.netId, low ? "the ped pool runs out" : "dead 15 s, out of sight");
+    return true;
+}
+
 void Peds::ApplyMirror(NetPed& np) {
     const PedSyncState& st = np.state;
     uint64_t now = NowMs();
@@ -1179,6 +1220,7 @@ void Peds::ApplyMirror(NetPed& np) {
     if (st.flags & PedSyncState::F_DEAD) {
         if (!np.deadApplied) {
             np.deadApplied = true;
+            np.deadMs = now;
             Cmd(0x02AB).I(np.handle).I(0).I(0).I(0).I(0).I(0).Run();  // proofs off so it can die
             bool ours = now - np.lastHitMs < 2000;
             if (ours) {  // our player killed it: the loot falls here (its owner drops none)
@@ -1199,6 +1241,8 @@ void Peds::ApplyMirror(NetPed& np) {
             }
             if (ped->Health() > 0.0f) Cmd(0x05BE).I(np.handle).Run();  // TASK_DIE: killed by someone else
             np.corpseMs = now;
+        } else if (ClearCopyBody(np, now)) {
+            return;
         } else if (!ped->InVehicle() && now - np.corpseMs > 500 &&
                    (st.vel.Length() > 2.0f || (ped->GetPosition() - st.pos).Length() > 1.5f)) {
             // Its body goes where its owner's does: one thrown far after its death (a "super punch" mod flings it 20 m,
@@ -1532,8 +1576,33 @@ void Peds::OnPreProcess() {
     }
 }
 
+// Our own dead, when the pool runs low as well. The game clears its passers-by's bodies after a while, but kept near
+// the other players (ManagePed is judged from where they stand) they stayed while three players emptied a minigun into
+// a crowd. Only the street's people (PED_GAME): a mission's dead are its script's. Out of this player's sight; the
+// other games drop their copies as ScanOwned reports them gone.
+static void ClearOwnBodies() {
+    static uint64_t atMs = 0;
+    if (NowMs() - atMs < 250 || PedPoolFree() >= kPedPoolLow) return;  // as often as the free count is looked at
+    atMs = NowMs();
+    CPoolHeader* pool = PedPool();
+    if (!pool) return;
+    int cleared = 0;
+    for (int i = 0; i < pool->size && cleared < 8; ++i) {
+        if (pool->byteMap[i] < 0) continue;
+        auto* p = (CPed*)(pool->objects + (size_t)i * kPedPoolElemSize);
+        if (p->IsPlayer() || !IsPedDead(p) || p->CreatedBy() != 1 /* PED_GAME */ || p->InVehicle()) continue;
+        if (const NetPed* np = Peds::Instance().Find(p); np && np->owner != Net().MyId()) continue;  // a copy: ClearCopyBody
+        if (CallMethod<0x534540, bool>(p)) continue;  // CEntity::GetIsOnScreen
+        Call<0x610F20>(p);  // CPopulation::RemovePed
+        ++cleared;
+    }
+    static int said = 0;
+    if (cleared && said++ < 10) LOGI("Ped pool runs out: %d of our own dead cleared", cleared);
+}
+
 void Peds::OnPostProcess() {
     bool ready = Net().Online() && core::IsPlayerReady();
+    if (ready) ClearOwnBodies();
     if (!ready || NowMs() - m_lastScan < 33) return;  // the near ones go every 66 ms
     m_lastScan = NowMs();
     ScanOwned();

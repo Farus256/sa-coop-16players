@@ -67,6 +67,7 @@ struct NetPed {
     game::CVector lastTaskTarget;
     uint8_t lastTaskMove = 0;
     bool deadApplied = false;
+    uint64_t deadMs = 0;     // when its death was applied here (its body is cleared after a while)
     uint64_t corpseMs = 0;   // its body last moved to where its owner's lies
     uint64_t lastHitMs = 0;  // our player hit it (sent to the owner): its loot falls here if it dies of it
     uint64_t askedMs = 0;    // we asked its owner for it (a Grove member to recruit, a hooker by our car)
@@ -170,6 +171,7 @@ private:
     bool EvictRandomCopy();
     game::CPed* SpawnMirror(NetPed& np);
     void Forget(uint16_t netId, bool deletePed);
+    bool ClearCopyBody(NetPed& np, uint64_t now);  // a dead copy's body goes after a while
     void Adopt(NetPed& np);
     void DropMirrorsOf(uint8_t id, bool keep);  // keep: this game's own people now (it left), else deleted (it restarted)
     PedSyncState Capture(NetPed& np);
