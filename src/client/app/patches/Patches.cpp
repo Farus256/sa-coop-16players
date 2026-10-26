@@ -809,6 +809,17 @@ void Apply() {
     if (mem::Check(0x5510CE, dummyPool, sizeof(dummyPool))) mem::Put<uint32_t>(0x5510CF, 8000);
     else LOGI("Dummy pool size left alone: another mod changed it");
 
+    // Every ped holds tasks (CPools::ms_pTaskPool, 500) and events reach it through the event pool (200). The other
+    // players' people come on top of this game's own, and with three players and a crowd shot at, the tasks ran out with
+    // 87 peds in the pool: CTask::operator new gave NULL to a new car's driver (0x650311). Bigger, as limit adjusters
+    // make them (a task is 0x80 bytes: 640 KB in all), unless one has changed them already.
+    static const uint8_t taskPool[] = {0x68, 0xF4, 0x01, 0x00, 0x00};   // push 500
+    static const uint8_t eventPool[] = {0x68, 0xC8, 0x00, 0x00, 0x00};  // push 200
+    if (mem::Check(0x55113E, taskPool, sizeof(taskPool))) mem::Put<uint32_t>(0x55113F, 5000);
+    else LOGI("Task pool size left alone: another mod changed it");
+    if (mem::Check(0x551176, eventPool, sizeof(eventPool))) mem::Put<uint32_t>(0x551177, 1000);
+    else LOGI("Event pool size left alone: another mod changed it");
+
     if (cfg.multiInstance) {
         mem::Write(0x7468E0, retFalse, sizeof(retFalse));  // IsAlreadyRunning -> false
         IsolateInstance();
