@@ -81,6 +81,10 @@ through the same camera as the host. In the lowrider contest and the beach dance
 host, and their points go into the shared score. Either player can carry the crates in the house robbery with Ryder
 and load them into the van.
 
+In the story's races a checkpoint counts for whichever player drives through it first, so a partner who crosses
+the line first wins the race for the host. When the race starts, each partner who is not driving is seated in a
+car of the host's model.
+
 | The host stands in the marker | The partner sees that the host is waiting |
 |---|---|
 | ![The host waits for the partner in the marker](docs/images/en/marker-host.jpg) | ![The partner is told that the host waits at the marker](docs/images/en/marker-partner.jpg) |
