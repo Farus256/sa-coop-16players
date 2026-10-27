@@ -25,7 +25,6 @@
 #include "entities/player/Players.h"
 #include "entities/profile/Profile.h"
 #include "entities/session/Flow.h"
-#include "entities/buffs/Buffs.h"
 #include "features/progress/SkinChoice.h"
 #include "shared/api/net-session/Session.h"
 #include "shared/config/Config.h"
@@ -421,7 +420,6 @@ std::vector<uint8_t> CaptureProfile() {
     uint8_t stats[kStatsSize];
     uint8_t maxHealth = info.maxHealth;
     memcpy(stats, (void*)kStatsBlock, kStatsSize);
-    buffs::Undo(stats, maxHealth);  // what was eaten and drunk lasts a while only
     w.Bytes(stats, kStatsSize);
     uint8_t clothes[kClothesSize];
     memcpy(clothes, me->ClothesDesc(), kClothesSize);

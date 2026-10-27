@@ -16,7 +16,6 @@
 #include "entities/player/Players.h"
 #include "entities/session/Flow.h"
 #include "features/revive/Revive.h"
-#include "features/shops/Shops.h"
 #include "features/story/missions/Missions.h"
 #include "pages/connect-menu/ConnectMenu.h"
 #include "shared/api/net-session/Session.h"
@@ -467,7 +466,6 @@ bool OnKeyDown(int vk, bool repeat) {
         ui::TogglePlayerList();
         return true;
     }
-    if (!inMenu && shops::KeyDown(vk)) return true;   // a shop's or a fridge's menu (E, then 1-4)
     if (vk == cfg.reviveKey && !inMenu && ReviveKeyPressed()) return true;  // otherwise E goes on (the next weapon)
     if (vk == cfg.passengerKey && !inMenu && IsPlayerReady()) {
         // a Grove Street member of another player's game in front: asked for, it joins this player's gang

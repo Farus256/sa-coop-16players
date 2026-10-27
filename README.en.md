@@ -42,7 +42,6 @@ It is based on the original 0.2.7 and keeps everything from it. Added:
 - the in-game scenes of missions (script cameras) show for the partners as for the host, and bring them next to him
 - the car radio is the driver's, its passengers hear the same station; a passenger's mouse wheel picks the gun
 - a new sniper scope; the more players, the sharper and more numerous the enemies
-- goods at the 24/7 counter and at the bar with effects that last a while
 - the First Person mod (BoPoH, DK22Pac, DenSpb, Crspy, Junior_Djjr; installed on its own) works with it: one can walk
   back in its first-person view, the aiming mod (imCamAim) keeps out of its way, and it no longer says "unknown game
   version"; the host can turn cheat codes off for everyone (`/cheats off`)
@@ -172,18 +171,6 @@ with the mouse, and the host's mission goes on until the host really dies. Only 
 
 ### The city
 
-The game's own 24/7s and bars sell more (`E` at the counter, then `1`-`4`); every player buys for itself, whoever
-came in first:
-
-| Goods | Price | What it does |
-|---|---|---|
-| A drink | $50 | for 20 minutes one of: steadier aim, quicker feet or more health; every 4 minutes a 32% chance of a minute drunk |
-| Food | $25 | full health (a snack at the bar) |
-| A soda | $150 | for 30 minutes: more stamina and a slightly faster run (24/7s only) |
-| Cigarettes | $250 | for 30 minutes: steadier aim (24/7s only) |
-
-The time each effect has left shows on the right of the screen.
-
 A blown-up security van spills $1000-$10000, and they are rarer. Going into shops and houses and out is quicker.
 
 A Grove Street homie another player's game made joins the gang of whoever called him (`G`), not the host's. When a
@@ -267,7 +254,7 @@ sees "The server does not answer", even on a home network. If an antivirus remov
 | T | chat: Enter sends a message, Esc closes the chat; the mouse wheel scrolls its history, the mouse picks messages, Ctrl+C copies them |
 | B | voice chat while the key is held |
 | G | take the nearest free passenger seat; by a Grove Street homie (another game's too): call him into your gang |
-| E | revive a wounded partner next to you; wounded: hold to give up; by a clerk or a barman: the menu, `1`-`4` to buy; |
+| E | revive a wounded partner next to you; wounded: hold to give up |
 | Mouse wheel | as a passenger: pick the gun to shoot out of the window |
 | Right mouse button | as a passenger: lean out of the window with the gun, fire with the left button |
 | F2 | the player list |
