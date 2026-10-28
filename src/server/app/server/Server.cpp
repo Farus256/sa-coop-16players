@@ -409,9 +409,9 @@ void Server::HandleCommand(Player* p, const std::string& text) {
                                 "/tphere all (собрать всех к себе), /cheats off|on (чит-коды у всех)",
                   "For the host: /kick <nickname or number> [reason], /say <text>, /go (start the mission without waiting for all), "
                   "/tphere all (bring everyone over), /cheats off|on (cheat codes for all)");
-        reply(kColorServer, "В игре: /tp [ник] (к игроку), /tphere [ник] (игрока к себе), /mute <ник> (не слышать его голос), "
+        reply(kColorServer, "В игре: /tp [ник] (к игроку), /tphere [ник] (игрока к себе), /pay <ник> <сумма> (перевести деньги), /mute <ник> (не слышать его голос), "
                             "/draw <0.5–4> (дальность прорисовки), /sync (состояние синхронизации)",
-              "In the game: /tp [nickname] (go to a player), /tphere [nickname] (bring a player over), /mute <nickname> "
+              "In the game: /tp [nickname] (go to a player), /tphere [nickname] (bring a player over), /pay <nickname> <amount> (send money), /mute <nickname> "
               "(stop hearing their voice), /draw <0.5-4> (draw distance), /sync (the sync's state)");
     } else if (cmd == "players" || cmd == "status") {
         reply(kColorInfo, Format("Игроков: %d из %d", JoinedCount(), m_cfg.maxPlayers),

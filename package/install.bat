@@ -5,11 +5,13 @@ cd /d "%~dp0"
 rem the game's own files, not its exe: some builds name it otherwise (gta-sa.exe), issue #54
 if not exist models\gta3.img (
     echo Здесь нет файлов игры. Распакуйте архив SA-COOP прямо в папку игры и запустите install.bat оттуда.
+    echo The game's files are not here. Unpack the SA-COOP archive right into the game folder and run install.bat from there.
     pause
     exit /b 1
 )
 if not exist coop.asi (
     echo Не хватает coop.asi. Распакуйте архив SA-COOP в папку игры целиком.
+    echo coop.asi is missing. Unpack the whole SA-COOP archive into the game folder.
     pause
     exit /b 1
 )
@@ -31,11 +33,14 @@ if exist gta_sa.exe (
 if exist vorbisHooked.dll (
     echo Загрузчик ASI уже установлен. Ничего менять не нужно.
     echo Можно запускать игру.
+    echo The ASI loader is already installed. Nothing needs changing.
+    echo You can start the game.
     pause
     exit /b 0
 )
 if not exist vorbisFile.dll (
     echo В папке игры нет vorbisFile.dll. Похоже, это не GTA San Andreas 1.0.
+    echo There is no vorbisFile.dll in the game folder. This does not look like GTA San Andreas 1.0.
     pause
     exit /b 1
 )
@@ -44,9 +49,12 @@ copy /y "coop\loader\vorbisFile.dll" vorbisFile.dll >nul
 if errorlevel 1 (
     ren vorbisHooked.dll vorbisFile.dll
     echo Не получилось скопировать загрузчик. Если игра лежит в Program Files, запустите install.bat от имени администратора.
+    echo Could not copy the loader. If the game is in Program Files, run install.bat as administrator.
     pause
     exit /b 1
 )
 echo Загрузчик ASI установлен. Оригинальный vorbisFile.dll сохранён как vorbisHooked.dll.
 echo Можно запускать игру.
+echo The ASI loader is installed. The original vorbisFile.dll is kept as vorbisHooked.dll.
+echo You can start the game.
 pause
